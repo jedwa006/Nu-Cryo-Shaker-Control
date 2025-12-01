@@ -2,18 +2,18 @@
   minimal_mqtt_bridge.ino
   ESP32-S3-ETH-8DI-8RO  ←→  W5500  ←→  Mosquitto on Pi
 
-  v0.2: 
-    - Bring up Ethernet (W5500, Waveshare pinout)
-    - Static IP: 192.168.50.10
-    - Connect to MQTT broker on Pi at 192.168.50.2:1883
-    - Subscribe to mill/cmd/control
-    - Publish mill/status/state once per second
-    - Use Waveshare WS_GPIO RGB helpers for clear state indication:
-        * Blue pulse on boot
-        * Off in IDLE
-        * Green in RUN
-        * Yellow in HOLD
-        * (Fault patterns reserved for later)
+  v0.3:
+    - v0.2 RGB state indication via WS_GPIO (IDLE/RUN/HOLD/FAULT colors)
+    - NEW: map DIN1..DIN3 into interlocks (door/estop/lid)
+    - NEW: auto-fault if any interlock drops while RUN or HOLD
+    - NEW: reject START if interlocks not OK
+    - Still publishing mill/status/state once per second
+    - Still consuming mill/cmd/control from HMI
+
+  Interlock mapping (for LV harness):
+    DIN1 (GPIO 4) → door_closed  (HIGH = door closed / OK)
+    DIN2 (GPIO 5) → estop_ok     (HIGH = estop circuit OK)
+    DIN3 (GPIO 6) → lid_locked   (HIGH = lid lock confirmed)
 */
 
 #include <SPI.h>
@@ -36,8 +36,13 @@
 #define SPI_MOSI_PIN  13
 
 // We now use RGB via WS_GPIO helpers (RGB_Light / RGB_Open_Time)
-// TEST_OUTPUT_PIN is not used anymore, but you can repurpose it later if needed.
-#define TEST_OUTPUT_PIN  GPIO_PIN_RGB   // kept for future use / clarity
+#define TEST_OUTPUT_PIN  GPIO_PIN_RGB   // kept for possible future direct use
+
+// DINs as interlock inputs (active HIGH = OK)
+// Map DIN1..DIN3 → door, estop, lid
+const int PIN_DIN_DOOR  = 4;   // DIN CH1
+const int PIN_DIN_ESTOP = 5;   // DIN CH2
+const int PIN_DIN_LID   = 6;   // DIN CH3
 
 // ----------- NETWORK CONFIG ---------------------------------------------
 
@@ -118,6 +123,7 @@ PubSubClient mqtt(ethClient);
 
 void initMillStatus();
 void updateMillStatusFromTick();
+void updateInterlocksFromHardware();
 void handleControlCommand(const char* payload, size_t len);
 void publishStatus();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
@@ -133,7 +139,7 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println();
-  Serial.println(F("minimal_mqtt_bridge starting..."));
+  Serial.println(F("minimal_mqtt_bridge v0.3 starting..."));
 
   // Initialize GPIO / RGB / buzzer tasks from Waveshare library
   GPIO_Init();
@@ -141,9 +147,10 @@ void setup() {
   // Brief blue pulse on boot so we know RGB + tasks are alive
   RGB_Open_Time(0, 0, 32, 300, 0);   // (R,G,B, duration_ms, flicker_ms=0) – solid blue for 300ms
 
-  // Optional: you can still treat TEST_OUTPUT_PIN as a raw GPIO later if needed
-  // pinMode(TEST_OUTPUT_PIN, OUTPUT);
-  // digitalWrite(TEST_OUTPUT_PIN, LOW);
+  // Interlock inputs
+  pinMode(PIN_DIN_DOOR,  INPUT);  // opto output → logic level
+  pinMode(PIN_DIN_ESTOP, INPUT);
+  pinMode(PIN_DIN_LID,   INPUT);
 
   // Reset W5500
   pinMode(ETH_RST_PIN, OUTPUT);
@@ -170,6 +177,8 @@ void setup() {
   mqtt.setBufferSize(512);
 
   initMillStatus();
+  // Make sure interlock booleans reflect actual pins before first publish
+  updateInterlocksFromHardware();
   showStateColor();   // set initial RGB based on IDLE state
 }
 
@@ -190,7 +199,7 @@ void loop() {
 }
 
 // ========================================================================
-// MILL STATE MACHINE IMPLEMENTATION (v0 SIM)
+// MILL STATE MACHINE IMPLEMENTATION (v0 SIM + interlocks)
 // ========================================================================
 
 void initMillStatus() {
@@ -205,6 +214,7 @@ void initMillStatus() {
   gStatus.timeInState_s    = 0;
   gStatus.timeRemaining_s  = 0;
 
+  // These will be updated from hardware on first tick
   gStatus.doorClosed  = true;
   gStatus.estopOk     = true;
   gStatus.lidLocked   = true;
@@ -216,9 +226,31 @@ void initMillStatus() {
   gStatus.heartbeat   = 0;
 }
 
+// Read interlock inputs from DIN hardware
+void updateInterlocksFromHardware() {
+  // Active HIGH = OK (HIGH = true, LOW = fault)
+  gStatus.doorClosed = (digitalRead(PIN_DIN_DOOR)  == HIGH);
+  gStatus.estopOk    = (digitalRead(PIN_DIN_ESTOP) == HIGH);
+  gStatus.lidLocked  = (digitalRead(PIN_DIN_LID)   == HIGH);
+}
+
 // called once per STATUS_INTERVAL_MS
 void updateMillStatusFromTick() {
   gStatus.heartbeat++;
+
+  // Always refresh interlocks from hardware first
+  updateInterlocksFromHardware();
+
+  // If any interlock goes bad while RUN/HOLD, trip to FAULT
+  bool interlockOk = gStatus.doorClosed && gStatus.estopOk && gStatus.lidLocked;
+  if (!interlockOk && (gStatus.state == STATE_RUN || gStatus.state == STATE_HOLD)) {
+    gStatus.state          = STATE_FAULT;
+    gStatus.substate       = SUB_FAULT_INTERLOCK;
+    gStatus.timeInState_s  = 0;
+    gStatus.timeRemaining_s = 0;
+    showStateColor();  // will go red
+    return;            // don't advance timers when faulted
+  }
 
   if (gStatus.state == STATE_RUN || gStatus.state == STATE_HOLD) {
     gStatus.timeInState_s++;
@@ -294,7 +326,7 @@ void showStateColor() {
       break;
 
     case STATE_FAULT:
-      // FAULT: for now just red; later we can use RGB_Open_Time to blink
+      // FAULT: red (later we can blink)
       RGB_Light(32, 0, 0);
       break;
 
@@ -434,6 +466,18 @@ void handleControlCommand(const char* payload, size_t len) {
   // Map commands → state; keep RGB in sync with showStateColor()
 
   if (strcmp(cmd, "START") == 0) {
+    // Only allow START if all interlocks are OK
+    bool interlockOk = gStatus.doorClosed && gStatus.estopOk && gStatus.lidLocked;
+    if (!interlockOk) {
+      Serial.println(F("START rejected: interlocks not OK"));
+      gStatus.state    = STATE_FAULT;
+      gStatus.substate = SUB_FAULT_INTERLOCK;
+      gStatus.timeInState_s   = 0;
+      gStatus.timeRemaining_s = 0;
+      showStateColor();  // red
+      return;
+    }
+
     gStatus.state       = STATE_RUN;
     gStatus.substate    = SUB_RUN_ACTIVE;
     if (gStatus.cycleCurrent == 0 || gStatus.cycleCurrent > gStatus.cycleTarget) {
@@ -469,12 +513,16 @@ void handleControlCommand(const char* payload, size_t len) {
 
   } else if (strcmp(cmd, "RESET_FAULT") == 0) {
     if (gStatus.state == STATE_FAULT) {
-      if (gStatus.doorClosed && gStatus.estopOk && gStatus.lidLocked) {
+      // Only clear FAULT if interlocks are now OK
+      bool interlockOk = gStatus.doorClosed && gStatus.estopOk && gStatus.lidLocked;
+      if (interlockOk) {
         gStatus.state       = STATE_IDLE;
         gStatus.substate    = SUB_IDLE_READY;
         gStatus.timeInState_s   = 0;
         gStatus.timeRemaining_s = 0;
         showStateColor(); // off
+      } else {
+        Serial.println(F("RESET_FAULT rejected: interlocks still not OK"));
       }
     }
 
