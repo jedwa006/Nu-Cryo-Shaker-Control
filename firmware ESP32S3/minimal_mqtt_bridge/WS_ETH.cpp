@@ -86,7 +86,7 @@ void EthernetTask(void *parameter) {
       eth_connected_Old = eth_connected;
       RGB_Open_Time(0, 60, 0,1000, 0); 
       printf("Network port connected!\r\n");
-      Acquisition_time();
+      // Acquisition_time();    //Temporarily disabled as the peer-to-peer network for the cryo-mill does not have an accessible NTP destination
     }
     else if(!eth_connected && eth_connected_Old){
       eth_connected_Old = eth_connected;

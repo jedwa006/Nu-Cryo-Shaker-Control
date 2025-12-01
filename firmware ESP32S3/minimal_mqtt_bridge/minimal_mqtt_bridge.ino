@@ -28,6 +28,9 @@ extern bool DIN_Read_CH2(void);
 extern bool DIN_Read_CH3(void);
 extern bool Relay_Immediate_Enable;   // auto DIN→relay mapping flag
 
+// --- Debug options --------------------------------------------------
+const bool STATUS_SERIAL_DEBUG = false;   // set to true to see STATUS JSON on Serial
+
 // --- Network / MQTT configuration -----------------------------------
 
 static const IPAddress ETH_LOCAL_IP(192, 168, 50, 10);
@@ -79,6 +82,15 @@ bool door_closed = false;
 // Temporary hack: mirror "door_closed" from lid until DI3 is wired.
 bool mirror_door_to_lid = true;
 
+// Small Helper and Tracking variable for interlock status
+bool allInterlocksOk() {
+  return estop_ok && lid_locked && door_closed;
+}
+
+// Interlock global status tracking
+bool lastInterlocksOk = false;
+
+
 // Cycle / timing placeholders (can be wired to real logic later)
 uint32_t cycle_current    = 0;
 uint32_t cycle_target     = 0;
@@ -108,16 +120,17 @@ void handleCommand(const String &cmd);
 // -------------------------------------------------------------------
 
 void checkInterlocks() {
-  // These read the current digital input state via WS_DIN
-  estop_ok   = DIN_Read_CH1();  // E-Stop OK
-  lid_locked = DIN_Read_CH2();  // Lid locked / latched
+  // Raw DIN reads: HIGH = 1, LOW = 0 (because of INPUT_PULLUP)
+  bool din_estop   = DIN_Read_CH1();
+  bool din_lid     = DIN_Read_CH2();
+  bool din_door    = mirror_door_to_lid ? din_lid : DIN_Read_CH3();
 
-  if (mirror_door_to_lid) {
-    // For bring-up: treat door_closed the same as lid_locked
-    door_closed = lid_locked;
-  } else {
-    door_closed = DIN_Read_CH3();  // Real door-closed input
-  }
+  // Invert semantics so:
+  //   LOW  (pressed / closed to GND) = OK
+  //   HIGH (released / open / broken) = FAULT
+  estop_ok    = !din_estop;
+  lid_locked  = !din_lid;
+  door_closed = !din_door;
 }
 
 // -------------------------------------------------------------------
@@ -274,8 +287,10 @@ void publishStatus() {
   }
 
   // Optional debug
-  Serial.print("[STATUS] ");
-  Serial.println(json);
+  if (STATUS_SERIAL_DEBUG) {
+    Serial.print("[STATUS] ");
+    Serial.println(json);
+  }
 }
 
 // -------------------------------------------------------------------
@@ -330,6 +345,17 @@ void loop() {
     lastStatusPublishMs = now;
     publishStatus();
   }
+
+  // Interlock monitoring: drop to FAULT if any interlock goes bad
+  checkInterlocks();
+  bool currentOk = allInterlocksOk();
+
+  if (!currentOk && lastInterlocksOk && millState != MILL_FAULT) {
+    millState = MILL_FAULT;
+    Serial.println("[SAFETY] Interlock opened → FAULT");
+  }
+
+  lastInterlocksOk = currentOk;
 
   // Diesel idle – let FreeRTOS tasks (DIN, RGB, Buzzer, ETH) breathe
   delay(10);
