@@ -2,26 +2,27 @@
   minimal_mqtt_bridge.ino
   ESP32-S3-ETH-8DI-8RO  ←→  W5500  ←→  Mosquitto on Pi
 
-  v0: 
+  v0.2: 
     - Bring up Ethernet (W5500, Waveshare pinout)
     - Static IP: 192.168.50.10
     - Connect to MQTT broker on Pi at 192.168.50.2:1883
     - Subscribe to mill/cmd/control
     - Publish mill/status/state once per second
-    - Toggle RGB LED based on START/STOP/HOLD/RESUME
-
-  Requires:
-    - Ethernet library
-    - PubSubClient library
-    - Waveshare WS_GPIO.h (and its .cpp) in the sketch folder or as a library
+    - Use Waveshare WS_GPIO RGB helpers for clear state indication:
+        * Blue pulse on boot
+        * Off in IDLE
+        * Green in RUN
+        * Yellow in HOLD
+        * (Fault patterns reserved for later)
 */
 
 #include <SPI.h>
 #include <Ethernet.h>
 #include <PubSubClient.h>
+#include <math.h>          // for sinf
 
-// Waveshare board helpers (pins, etc.)
-#include "WS_GPIO.h"   // from Waveshare examples
+// Waveshare board helpers (pins, RGB/buzzer tasks)
+#include "WS_GPIO.h"       // from Waveshare examples
 
 // ----------- BOARD / HARDWARE CONFIG (Waveshare ESP32-S3-ETH-8DI-8RO) -----
 
@@ -34,8 +35,9 @@
 #define SPI_MISO_PIN  14
 #define SPI_MOSI_PIN  13
 
-// Use on-board RGB LED as "test output"
-#define TEST_OUTPUT_PIN  GPIO_PIN_RGB   // defined in WS_GPIO.h
+// We now use RGB via WS_GPIO helpers (RGB_Light / RGB_Open_Time)
+// TEST_OUTPUT_PIN is not used anymore, but you can repurpose it later if needed.
+#define TEST_OUTPUT_PIN  GPIO_PIN_RGB   // kept for future use / clarity
 
 // ----------- NETWORK CONFIG ---------------------------------------------
 
@@ -121,6 +123,8 @@ void publishStatus();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void ensureMqttConnected();
 
+void showStateColor();   // helper to keep RGB and gStatus in sync
+
 // ========================================================================
 // SETUP
 // ========================================================================
@@ -134,14 +138,14 @@ void setup() {
   // Initialize GPIO / RGB / buzzer tasks from Waveshare library
   GPIO_Init();
 
-  // Test output (RGB LED)
+  // Brief blue pulse on boot so we know RGB + tasks are alive
+  RGB_Open_Time(0, 0, 32, 300, 0);   // (R,G,B, duration_ms, flicker_ms=0) – solid blue for 300ms
+
+  // Optional: you can still treat TEST_OUTPUT_PIN as a raw GPIO later if needed
   // pinMode(TEST_OUTPUT_PIN, OUTPUT);
   // digitalWrite(TEST_OUTPUT_PIN, LOW);
 
-  // Optional: a power-on color so you know the RGB works
-  RGB_Light(0, 0, 16);  // dim blue on boot
-
-  // Optional: reset W5500
+  // Reset W5500
   pinMode(ETH_RST_PIN, OUTPUT);
   digitalWrite(ETH_RST_PIN, LOW);
   delay(50);
@@ -162,10 +166,11 @@ void setup() {
   mqtt.setServer(mqttServer, mqttPort);
   mqtt.setCallback(mqttCallback);
 
-  // 🔧 Increase MQTT buffer size to handle our JSON payload
+  // Increase MQTT buffer size to handle our JSON payload
   mqtt.setBufferSize(512);
 
   initMillStatus();
+  showStateColor();   // set initial RGB based on IDLE state
 }
 
 // ========================================================================
@@ -267,6 +272,35 @@ const char* substateToString(MillSubstate s) {
     case SUB_FAULT_DEVICE:     return "FAULT_DEVICE";
     case SUB_FAULT_INTERNAL:   return "FAULT_INTERNAL";
     default:                   return "UNKNOWN";
+  }
+}
+
+// Keep RGB color consistent with current state
+void showStateColor() {
+  switch (gStatus.state) {
+    case STATE_IDLE:
+      // IDLE: LED off
+      RGB_Light(0, 0, 0);
+      break;
+
+    case STATE_RUN:
+      // RUN: solid green
+      RGB_Light(0, 32, 0);
+      break;
+
+    case STATE_HOLD:
+      // HOLD: yellow
+      RGB_Light(32, 32, 0);
+      break;
+
+    case STATE_FAULT:
+      // FAULT: for now just red; later we can use RGB_Open_Time to blink
+      RGB_Light(32, 0, 0);
+      break;
+
+    default:
+      RGB_Light(0, 0, 0);
+      break;
   }
 }
 
@@ -397,7 +431,7 @@ void handleControlCommand(const char* payload, size_t len) {
   Serial.print(F("Parsed cmd = "));
   Serial.println(cmd);
 
-  // Map commands → state + test output
+  // Map commands → state; keep RGB in sync with showStateColor()
 
   if (strcmp(cmd, "START") == 0) {
     gStatus.state       = STATE_RUN;
@@ -407,27 +441,30 @@ void handleControlCommand(const char* payload, size_t len) {
     }
     gStatus.timeInState_s   = 0;
     gStatus.timeRemaining_s = gStatus.runTime_s;
-    digitalWrite(TEST_OUTPUT_PIN, HIGH);  // RGB on
+
+    showStateColor();  // solid green
 
   } else if (strcmp(cmd, "STOP") == 0) {
     gStatus.state       = STATE_IDLE;
     gStatus.substate    = SUB_IDLE_READY;
     gStatus.timeInState_s   = 0;
     gStatus.timeRemaining_s = 0;
-    digitalWrite(TEST_OUTPUT_PIN, LOW);   // RGB off
+
+    showStateColor();  // off
 
   } else if (strcmp(cmd, "HOLD") == 0) {
     if (gStatus.state == STATE_RUN) {
       gStatus.state    = STATE_HOLD;
       gStatus.substate = SUB_HOLD_USER;
-      // keep remaining time; timers still tick in update() but
-      // you can change that behaviour later if you prefer
+
+      showStateColor(); // yellow
     }
 
   } else if (strcmp(cmd, "RESUME") == 0) {
     if (gStatus.state == STATE_HOLD) {
       gStatus.state = STATE_RUN;
       // substate unchanged (RUN_ACTIVE or RUN_COOLING)
+      showStateColor(); // green again
     }
 
   } else if (strcmp(cmd, "RESET_FAULT") == 0) {
@@ -437,6 +474,7 @@ void handleControlCommand(const char* payload, size_t len) {
         gStatus.substate    = SUB_IDLE_READY;
         gStatus.timeInState_s   = 0;
         gStatus.timeRemaining_s = 0;
+        showStateColor(); // off
       }
     }
 
