@@ -24,6 +24,8 @@
  *          keep MQTT buffer override and LN2 stub stable for Node-RED.
  *  v0.12 – Switch LN2 polling to real LC108 Modbus RTU over Serial1 RS-485,
  *          no WS_RS485 task, pid_ln2.comm_ok reflects actual comm status.
+ *  v0.13 – Read LC108 PV + STATUS + SV in a single FC03 multi-register call,
+ *          expose raw status word as pid_ln2.status_raw in JSON for alarm mapping.
  *
  * Status JSON schema (mill/status/state):
  *  {
@@ -39,9 +41,10 @@
  *      "pv_c": <float>               // legacy LN2 PV for existing UI (°C)
  *    },
  *    "pid_ln2": {
- *      "pv_c":   <float>,            // LN2 PV (°C), from LC108 Modbus
- *      "sv_c":   <float>,            // LN2 setpoint (°C), from LC108 Modbus
- *      "comm_ok": true|false         // RS-485 comm health for last poll
+ *      "pv_c":      <float>,         // LN2 PV (°C), from LC108 Modbus
+ *      "sv_c":      <float>,         // LN2 setpoint (°C), from LC108 Modbus
+ *      "comm_ok":   true|false,      // RS-485 comm health for last poll
+ *      "status_raw": <uint>          // raw LC108 status word (for alarm bit mapping)
  *    },
  *    "interlocks": {
  *      "door_closed": true|false,
@@ -141,13 +144,14 @@ bool mirror_door_to_lid = true;
 // -------------------------------------------------------------------
 
 struct PidSnapshot {
-  bool  comm_ok;      // true if last poll was successful
-  float pv_c;         // process variable (°C)
-  float sv_c;         // setpoint (°C)
-  float output_pct;   // controller output (%), if/when we wire it
+  bool     comm_ok;      // true if last poll was successful
+  float    pv_c;         // process variable (°C)
+  float    sv_c;         // setpoint (°C)
+  float    output_pct;   // controller output (%), if/when we wire it
+  uint16_t status_raw;   // raw status word from LC108
 };
 
-PidSnapshot pid_ln2 = { false, 0.0f, 0.0f, 0.0f };
+PidSnapshot pid_ln2 = { false, 0.0f, 0.0f, 0.0f, 0 };
 
 // Legacy scalar LN2 PV (kept for backwards compatibility with Node-RED)
 float ln2_pv_c = 0.0f;
@@ -157,15 +161,19 @@ float ln2_pv_c = 0.0f;
 // -------------------------------------------------------------------
 
 // LN2 controller is Modbus ID 3 on the shared RS-485 bus
-static const uint8_t  LC108_LN2_ADDR    = 3;
+static const uint8_t  LC108_LN2_ADDR      = 3;
 
 // LC108 manual uses 1-based register numbering; Modbus FC03 uses 0-based
-// addresses. If the PV is register 1, SV is register 6 in the manual,
-// their FC03 addresses are 0 and 5 respectively.
-static const uint16_t LC108_REG_PV_ADDR = 0;   // PV  (°C × 10), register 1 → address 0
-static const uint16_t LC108_REG_SV_ADDR = 5;   // SV  (°C × 10), register 6 → address 5
+// addresses. If the PV is register 1, STATUS is register 5, SV is
+// register 6 in the manual, their FC03 addresses are 0, 4, and 5.
+static const uint16_t LC108_REG_PV_ADDR   = 0;   // PV  (°C × 10), register 1 → address 0
+static const uint16_t LC108_REG_STATUS_ADDR = 4; // STATUS word, register 5 → address 4
+static const uint16_t LC108_REG_SV_ADDR   = 5;   // SV  (°C × 10), register 6 → address 5
 
-static const uint32_t LC108_TIMEOUT_MS  = 50;  // per-request timeout
+// We'll read a contiguous block starting at PV to cover PV..SV.
+static const uint16_t LC108_READ_COUNT    = 6;   // add safety margin for unknown regs 2–4
+
+static const uint32_t LC108_TIMEOUT_MS    = 50;  // per-request timeout
 
 // -------------------------------------------------------------------
 // Cycle timing
@@ -266,7 +274,6 @@ bool lc108_read_holding(uint8_t slave,
                         uint16_t reg,
                         uint16_t count,
                         uint16_t *out);
-bool lc108_read_u16(uint8_t addr, uint16_t reg, uint16_t *out);
 
 // -------------------------------------------------------------------
 // Interlocks
@@ -550,52 +557,42 @@ uint16_t modbus_crc16(const uint8_t *data, uint16_t len) {
 }
 
 // -------------------------------------------------------------------
-// Low-level: read one holding register (function 0x03) as uint16_t
-//  addr  = slave address
-//  reg   = starting register *address* (0-based)
-//  out   = filled with raw 16-bit value on success
-// Returns true on success, false on timeout/CRC/protocol error.
-// -------------------------------------------------------------------
-bool lc108_read_u16(uint8_t addr, uint16_t reg, uint16_t *out) {
-  if (!out) return false;
-
-  uint16_t tmp = 0;
-  if (!lc108_read_holding(addr, reg, 1, &tmp)) {
-    return false;
-  }
-
-  *out = tmp;
-  return true;
-}
-
-// -------------------------------------------------------------------
 // LN2 PID polling (real LC108 over RS-485 / Modbus RTU)
 //
-// Reads PV and SV from LC108 and updates pid_ln2 + ln2_pv_c.
+// Reads a contiguous block covering PV, STATUS, and SV and
+// updates pid_ln2 + ln2_pv_c.
 // On any error, comm_ok is set false and previous PV/SV are kept.
 // -------------------------------------------------------------------
 void pollPidLn2() {
-  uint16_t pvRaw = 0;
-  uint16_t svRaw = 0;
+  uint16_t regs[LC108_READ_COUNT] = {0};
 
-  bool okPv = lc108_read_u16(LC108_LN2_ADDR, LC108_REG_PV_ADDR, &pvRaw);
-  bool okSv = lc108_read_u16(LC108_LN2_ADDR, LC108_REG_SV_ADDR, &svRaw);
+  bool ok = lc108_read_holding(LC108_LN2_ADDR,
+                               LC108_REG_PV_ADDR,
+                               LC108_READ_COUNT,
+                               regs);
 
-  if (!(okPv && okSv)) {
+  if (!ok) {
     pid_ln2.comm_ok = false;
-    // Keep last known pv_c / sv_c, but flag comm fault
+    // Keep last known pv_c / sv_c / status_raw, but flag comm fault
     Serial.println("[LC108] pollPidLn2: comm error (timeout, bad header, or CRC)");
     return;
   }
 
-  pid_ln2.comm_ok = true;
+  pid_ln2.comm_ok    = true;
+
+  uint16_t pvRaw     = regs[0];                           // PV
+  uint16_t statusRaw = regs[LC108_REG_STATUS_ADDR
+                            - LC108_REG_PV_ADDR];         // STATUS within block
+  uint16_t svRaw     = regs[LC108_REG_SV_ADDR
+                            - LC108_REG_PV_ADDR];         // SV within block
 
   // These are signed 16-bit values representing °C × 10
   int16_t pvInt = (int16_t)pvRaw;
   int16_t svInt = (int16_t)svRaw;
 
-  pid_ln2.pv_c = pvInt / 10.0f;
-  pid_ln2.sv_c = svInt / 10.0f;
+  pid_ln2.pv_c       = pvInt / 10.0f;
+  pid_ln2.sv_c       = svInt / 10.0f;
+  pid_ln2.status_raw = statusRaw;
 
   // Keep legacy scalar in sync for any old wiring
   ln2_pv_c = pid_ln2.pv_c;
@@ -604,7 +601,9 @@ void pollPidLn2() {
   Serial.print(pid_ln2.pv_c);
   Serial.print("°C  SV=");
   Serial.print(pid_ln2.sv_c);
-  Serial.println("°C  (ID=3)");
+  Serial.print("°C  STATUS=0x");
+  Serial.print(pid_ln2.status_raw, HEX);
+  Serial.println("  (ID=3)");
 }
 
 // -------------------------------------------------------------------
@@ -613,7 +612,7 @@ void pollPidLn2() {
 
 void publishStatus() {
   String json;
-  json.reserve(320);
+  json.reserve(360);
 
   json += "{";
 
@@ -676,6 +675,8 @@ void publishStatus() {
   json += String(pid_ln2.sv_c, 1);
   json += ",\"comm_ok\":";
   json += pid_ln2.comm_ok ? "true" : "false";
+  json += ",\"status_raw\":";
+  json += String(pid_ln2.status_raw);
   json += "},";
 
   // interlocks
@@ -988,7 +989,7 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println();
-  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.12 (Ethernet + cycles + relays + LN2 Modbus PV/SV)");
+  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.13 (Ethernet + cycles + relays + LN2 Modbus PV/SV/STATUS)");
 
   // RGB/Buzzer and local GPIO
   GPIO_Init();
