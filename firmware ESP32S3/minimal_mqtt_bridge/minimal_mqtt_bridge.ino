@@ -11,6 +11,9 @@
  *  v0.5 – Use Waveshare WS_ETH (W5500 Ethernet) instead of WiFi,
  *         static IP support, disable auto DIN→relay mapping,
  *         door interlock temporarily mirrored to lid for bring-up.
+ *  v0.6 – Add simple cycle timer, CH1 relay control, and SET_CONFIG
+ *         command to set cycle_target_s from Node-RED (ESP is source of truth).
+ *  v0.7 - multi-cycle support and START lockout when no cycle config.
  */
 
 #include <Arduino.h>
@@ -19,6 +22,7 @@
 #include "WS_GPIO.h"
 #include "WS_DIN.h"
 #include "WS_ETH.h"
+#include "I2C_Driver.h"   // for I2C_Init and relay expander
 
 // --- Externals from Waveshare libs ----------------------------------
 
@@ -27,9 +31,6 @@ extern bool DIN_Read_CH1(void);
 extern bool DIN_Read_CH2(void);
 extern bool DIN_Read_CH3(void);
 extern bool Relay_Immediate_Enable;   // auto DIN→relay mapping flag
-
-// --- Debug options --------------------------------------------------
-const bool STATUS_SERIAL_DEBUG = false;   // set to true to see STATUS JSON on Serial
 
 // --- Network / MQTT configuration -----------------------------------
 
@@ -47,6 +48,10 @@ static const char *MQTT_CMD_SUB_TOPIC = "mill/cmd/#";
 // Use the generic Network client provided by the ESP32 core
 NetworkClient netClient;
 PubSubClient mqttClient(netClient);
+
+// --- Debug options --------------------------------------------------
+
+static const bool STATUS_SERIAL_DEBUG = false; // set true to see STATUS JSON on Serial
 
 // --- Mill state machine ---------------------------------------------
 
@@ -82,24 +87,35 @@ bool door_closed = false;
 // Temporary hack: mirror "door_closed" from lid until DI3 is wired.
 bool mirror_door_to_lid = true;
 
-// Small Helper and Tracking variable for interlock status
+// LN2 PV temperature (°C) – placeholder until a real sensor is wired in
+float ln2_pv_c = 0.0f;
+
+// --- Cycle timing ---------------------------------------------------
+static const uint32_t DEFAULT_CYCLE_TARGET_S = 300;  // 5 min default
+
+uint32_t cycle_current    = 0;   // seconds into current cycle
+uint32_t cycle_target     = 0;   // seconds per cycle
+uint32_t time_remaining_s = 0;   // seconds left in current cycle
+
+unsigned long lastCycleTickMs = 0;
+
+// Multi-cycle
+uint32_t cycle_total  = 0;   // total cycles requested (from HMI)
+uint32_t cycle_index  = 0;   // 0 when idle, 1..cycle_total when running
+
+// --- Relay control (mill motor on CH1) ------------------------------
+
+bool millRelayState = false;  // our view of CH1 state
+
+// --- Interlock tracking ---------------------------------------------
+
 bool allInterlocksOk() {
   return estop_ok && lid_locked && door_closed;
 }
 
-// Interlock global status tracking
 bool lastInterlocksOk = false;
 
-
-// Cycle / timing placeholders (can be wired to real logic later)
-uint32_t cycle_current    = 0;
-uint32_t cycle_target     = 0;
-uint32_t time_remaining_s = 0;
-
-// LN2 PV temperature (°C) – placeholder until a real sensor is wired in
-float ln2_pv_c = 0.0f;
-
-// --- Timing ---------------------------------------------------------
+// --- MQTT timing ----------------------------------------------------
 
 unsigned long lastStatusPublishMs      = 0;
 const unsigned long STATUS_PUBLISH_MS  = 500;   // 2 Hz to Node-RED
@@ -114,6 +130,9 @@ void mqttReconnect();
 void publishStatus();
 void checkInterlocks();
 void handleCommand(const String &cmd);
+void handleConfig(const String &body);
+void updateCycleTimer();
+void updateRelayFromState();
 
 // -------------------------------------------------------------------
 // Interlocks
@@ -121,9 +140,9 @@ void handleCommand(const String &cmd);
 
 void checkInterlocks() {
   // Raw DIN reads: HIGH = 1, LOW = 0 (because of INPUT_PULLUP)
-  bool din_estop   = DIN_Read_CH1();
-  bool din_lid     = DIN_Read_CH2();
-  bool din_door    = mirror_door_to_lid ? din_lid : DIN_Read_CH3();
+  bool din_estop = DIN_Read_CH1();
+  bool din_lid   = DIN_Read_CH2();
+  bool din_door  = mirror_door_to_lid ? din_lid : DIN_Read_CH3();
 
   // Invert semantics so:
   //   LOW  (pressed / closed to GND) = OK
@@ -134,28 +153,114 @@ void checkInterlocks() {
 }
 
 // -------------------------------------------------------------------
-// MQTT command handling
+// Cycle timer
+// -------------------------------------------------------------------
+
+void updateCycleTimer() {
+  unsigned long now = millis();
+
+  if (millState == MILL_RUN && cycle_target > 0 && cycle_total > 0 && cycle_index > 0) {
+    if (now - lastCycleTickMs >= 1000) {  // 1 Hz tick
+      lastCycleTickMs = now;
+
+      if (cycle_current < cycle_target) {
+        cycle_current++;
+      }
+
+      if (cycle_current >= cycle_target) {
+        // End of this cycle
+        cycle_current    = cycle_target;
+        time_remaining_s = 0;
+
+        if (cycle_index < cycle_total) {
+          // Start next cycle immediately
+          cycle_index++;
+          cycle_current    = 0;
+          time_remaining_s = cycle_target;
+          Serial.print("[CYCLE] Starting next cycle ");
+          Serial.print(cycle_index);
+          Serial.print(" / ");
+          Serial.println(cycle_total);
+        } else {
+          // All cycles complete
+          millState = MILL_IDLE;
+          Serial.println("[CYCLE] All cycles complete → IDLE");
+        }
+      } else {
+        time_remaining_s = cycle_target - cycle_current;
+      }
+    }
+  } else {
+    // Not running: keep tick anchor fresh so we don't "jump" later
+    lastCycleTickMs = now;
+  }
+}
+
+
+// -------------------------------------------------------------------
+// Relay control (CH1 follows RUN state)
+// -------------------------------------------------------------------
+
+void updateRelayFromState() {
+  // For now: CH1 = mill motor enable
+  bool want = (millState == MILL_RUN);
+
+  if (want != millRelayState) {
+    bool ok = Relay_CHx(1, want);  // CH1
+
+    if (ok) {
+      millRelayState = want;
+      Serial.print("[RELAY] CH1 → ");
+      Serial.println(want ? "ON" : "OFF");
+    } else {
+      Serial.println("[RELAY] Failed to set CH1");
+    }
+  }
+}
+
+// -------------------------------------------------------------------
+// Command handling
 // -------------------------------------------------------------------
 
 void handleCommand(const String &cmd) {
   // Always evaluate commands against *fresh* interlock state
   checkInterlocks();
 
-  if (cmd == "START") {
-    // Only allow RUN if all interlocks are good and we are not faulted
+    if (cmd == "START") {
+    checkInterlocks();
+
+    // Require both a time per cycle and a cycle count
+    if (cycle_target == 0 || cycle_total == 0) {
+      Serial.println("[CMD] START ignored → no cycle config (cycle_target or total_cycles is 0)");
+      return;
+    }
+
     if (estop_ok && lid_locked && door_closed && millState != MILL_FAULT) {
+      // Start first cycle
+      cycle_index      = 1;
+      cycle_current    = 0;
+      time_remaining_s = cycle_target;
+
       millState = MILL_RUN;
-      Serial.println("[CMD] START → RUN");
+      Serial.print("[CMD] START → RUN (cycle ");
+      Serial.print(cycle_index);
+      Serial.print(" / ");
+      Serial.print(cycle_total);
+      Serial.println(")");
     } else {
-      // Trying to start with bad interlocks => fault
       millState = MILL_FAULT;
       Serial.println("[CMD] START blocked → FAULT (interlocks not OK)");
     }
   }
-  else if (cmd == "STOP") {
-    millState = MILL_IDLE;
+
+    else if (cmd == "STOP") {
+    millState        = MILL_IDLE;
+    cycle_current    = 0;
+    time_remaining_s = cycle_target;
+    cycle_index      = 0;
     Serial.println("[CMD] STOP → IDLE");
   }
+
   else if (cmd == "HOLD") {
     if (millState == MILL_RUN) {
       millState = MILL_HOLD;
@@ -166,7 +271,10 @@ void handleCommand(const String &cmd) {
   }
   else if (cmd == "RESET_FAULT") {
     if (millState == MILL_FAULT && estop_ok && lid_locked && door_closed) {
-      millState = MILL_IDLE;
+      millState        = MILL_IDLE;
+      cycle_current    = 0;
+      time_remaining_s = cycle_target;
+      cycle_index      = 0;
       Serial.println("[CMD] RESET_FAULT → IDLE");
     } else {
       Serial.println("[CMD] RESET_FAULT ignored (not in FAULT or interlocks bad)");
@@ -174,7 +282,82 @@ void handleCommand(const String &cmd) {
   }
 }
 
-// MQTT callback from PubSubClient
+// Very simple config handler: looks for "cycle_target_s": <integer>
+void handleConfig(const String &body) {
+  // --- cycle_target_s ------------------------------------------------
+  int keyPos = body.indexOf("cycle_target_s");
+  if (keyPos >= 0) {
+    int colonPos = body.indexOf(':', keyPos);
+    if (colonPos >= 0) {
+      int idx = colonPos + 1;
+      while (idx < (int)body.length() && (body[idx] == ' ' || body[idx] == '\"')) {
+        idx++;
+      }
+      int start = idx;
+      while (idx < (int)body.length() && isDigit(body[idx])) {
+        idx++;
+      }
+      if (idx > start) {
+        uint32_t val = body.substring(start, idx).toInt();
+
+        if (val == 0) {
+          // Explicitly disable timing
+          cycle_target     = 0;
+          time_remaining_s = 0;
+          Serial.println("[CFG] cycle_target_s DISABLED (0)");
+        } else if (val <= 24UL * 3600UL) {
+          cycle_target     = val;
+          time_remaining_s = val;
+          Serial.print("[CFG] cycle_target_s set to ");
+          Serial.print(val);
+          Serial.println(" s");
+        } else {
+          Serial.print("[CFG] cycle_target_s out of range: ");
+          Serial.println(val);
+        }
+      }
+    }
+  }
+
+
+  // --- total_cycles --------------------------------------------------
+  keyPos = body.indexOf("total_cycles");
+  if (keyPos >= 0) {
+    int colonPos = body.indexOf(':', keyPos);
+    if (colonPos >= 0) {
+      int idx = colonPos + 1;
+      while (idx < (int)body.length() && (body[idx] == ' ' || body[idx] == '\"')) {
+        idx++;
+      }
+      int start = idx;
+      while (idx < (int)body.length() && isDigit(body[idx])) {
+        idx++;
+      }
+      if (idx > start) {
+        uint32_t val = body.substring(start, idx).toInt();
+
+        if (val == 0) {
+          // Explicitly disable multi-cycle
+          cycle_total = 0;
+          cycle_index = 0;
+          Serial.println("[CFG] total_cycles DISABLED (0)");
+        } else if (val <= 9999UL) {
+          cycle_total = val;
+          Serial.print("[CFG] total_cycles set to ");
+          Serial.println(val);
+        } else {
+          Serial.print("[CFG] total_cycles out of range: ");
+          Serial.println(val);
+        }
+      }
+    }
+  }
+}
+
+// -------------------------------------------------------------------
+// MQTT callback
+// -------------------------------------------------------------------
+
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String t(topic);
   String body;
@@ -192,14 +375,18 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     return;
   }
 
-  // Extremely simple parse: just look for the command token
+  // Determine what kind of command this is
   String cmd;
-  if      (body.indexOf("RESET_FAULT") >= 0) cmd = "RESET_FAULT";
+  if      (body.indexOf("SET_CONFIG")   >= 0) cmd = "SET_CONFIG";
+  else if (body.indexOf("RESET_FAULT") >= 0) cmd = "RESET_FAULT";
   else if (body.indexOf("START")       >= 0) cmd = "START";
   else if (body.indexOf("STOP")        >= 0) cmd = "STOP";
   else if (body.indexOf("HOLD")        >= 0) cmd = "HOLD";
 
-  if (cmd.length() > 0) {
+  if (cmd == "SET_CONFIG") {
+    handleConfig(body);
+  }
+  else if (cmd.length() > 0) {
     handleCommand(cmd);
   } else {
     Serial.println("[MQTT] No recognized cmd in payload");
@@ -258,6 +445,14 @@ void publishStatus() {
   json += String(cycle_target);
   json += ",";
 
+  // New: multi-cycle info
+  json += "\"cycle_index\":";
+  json += String(cycle_index);
+  json += ",";
+  json += "\"cycle_total\":";
+  json += String(cycle_total);
+  json += ",";
+
   json += "\"time_remaining_s\":";
   json += String(time_remaining_s);
   json += ",";
@@ -301,12 +496,16 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println();
-  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.5 (Ethernet + Node-RED)");
+  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.6 (Ethernet + timer + relay + config)");
 
-  // Waveshare RGB + Buzzer
+  // RGB/Buzzer
   GPIO_Init();
 
-  // Disable auto "DIN→Relay" behavior for now; we are not driving relays yet.
+  // I2C + relay expander
+  I2C_Init();
+  Relay_Init();
+
+  // We do NOT want DIN to auto-drive relays
   Relay_Immediate_Enable = false;
 
   // Initialize digital inputs + background task
@@ -321,6 +520,8 @@ void setup() {
   // MQTT client setup
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
+
+  lastCycleTickMs = millis();
 
   Serial.print("ETH local IP (after init): ");
   Serial.println(ETH.localIP());
@@ -346,7 +547,10 @@ void loop() {
     publishStatus();
   }
 
-  // Interlock monitoring: drop to FAULT if any interlock goes bad
+  // Cycle timer
+  updateCycleTimer();
+
+  // Interlock monitoring → FAULT on open
   checkInterlocks();
   bool currentOk = allInterlocksOk();
 
@@ -357,6 +561,9 @@ void loop() {
 
   lastInterlocksOk = currentOk;
 
-  // Diesel idle – let FreeRTOS tasks (DIN, RGB, Buzzer, ETH) breathe
+  // Drive relay CH1 based on millState
+  updateRelayFromState();
+
+  // Let FreeRTOS tasks (DIN, RGB, Buzzer, ETH) breathe
   delay(10);
 }
