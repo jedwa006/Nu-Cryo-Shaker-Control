@@ -4,27 +4,54 @@
  * Nu-Cryo Shaker – ESP32-S3-POE-ETH-8DI-8RO bridge
  *
  * Version history
- *  v0.1 – First minimal MQTT bridge over WiFi (prototype).
- *  v0.2 – Added basic JSON status + Node-RED integration.
- *  v0.3 – Mapped DIN interlocks and status topic mill/status/state.
- *  v0.4 – Switched to Waveshare DIN / GPIO APIs, cleaned JSON structure.
- *  v0.5 – Use Waveshare WS_ETH (W5500 Ethernet) instead of WiFi,
- *         static IP support, disable auto DIN→relay mapping,
- *         door interlock temporarily mirrored to lid for bring-up.
- *  v0.6 – Add simple cycle timer, CH1 relay control, and SET_CONFIG
- *         command to set cycle_target_s from Node-RED (ESP is source of truth).
- *  v0.7 – Multi-cycle support and START lockout when no cycle config.
- *  v0.8 – Centralize relay mapping, add CH2 fault relay following MILL_FAULT,
- *         clean up Ethernet init and keep ESP as timing source of truth.
- *  v0.9 – Map CH3 LN2 valve + CH4 cabinet fan from millState,
- *         add fault_code + fault_reason to status JSON for Node-RED.
+ *  v0.1  – First minimal MQTT bridge over WiFi (prototype).
+ *  v0.2  – Added basic JSON status + Node-RED integration.
+ *  v0.3  – Mapped DIN interlocks and status topic mill/status/state.
+ *  v0.4  – Switched to Waveshare DIN / GPIO APIs, cleaned JSON structure.
+ *  v0.5  – Use Waveshare WS_ETH (W5500 Ethernet) instead of WiFi,
+ *          static IP support, disable auto DIN→relay mapping,
+ *          door interlock temporarily mirrored to lid for bring-up.
+ *  v0.6  – Add simple cycle timer, CH1 relay control, and SET_CONFIG
+ *          command to set cycle_target_s from Node-RED (ESP is source of truth).
+ *  v0.7  – Multi-cycle support and START lockout when no cycle config.
+ *  v0.8  – Centralize relay mapping, add CH2 fault relay following MILL_FAULT,
+ *          clean up Ethernet init and keep ESP as timing source of truth.
+ *  v0.9  – Map CH3 LN2 valve + CH4 cabinet fan from millState,
+ *          add fault_code + fault_reason to status JSON for Node-RED.
  *  v0.10 – Add LN2 PID snapshot stub (pid_ln2) and richer status JSON
  *          for future RS-485 / Modbus integration, keep legacy pid.pv_c.
+ *  v0.11 – Housekeeping: JSON schema doc, default status debug off,
+ *          keep MQTT buffer override and LN2 stub stable for Node-RED.
+ *
+ * Status JSON schema (mill/status/state):
+ *  {
+ *    "state": "IDLE" | "RUN" | "HOLD" | "FAULT",
+ *    "cycle_current": <uint>,      // seconds elapsed in current cycle
+ *    "cycle_target":  <uint>,      // seconds per cycle
+ *    "time_remaining_s": <uint>,   // seconds remaining in current cycle
+ *    "cycle_total":   <uint>,      // requested total cycles in recipe
+ *    "cycle_index":   <uint>,      // 0 when idle, 1..cycle_total when running/completed
+ *    "fault_code":    <uint>,      // 0 = none; 1=ESTOP, 2=LID, 3=DOOR, 10=INTERLOCK
+ *    "fault_reason":  "<string>",  // e.g. "LID_OPEN"
+ *    "pid": {
+ *      "pv_c": <float>             // legacy LN2 PV for existing UI (°C)
+ *    },
+ *    "pid_ln2": {
+ *      "pv_c":   <float>,          // LN2 PV (°C)
+ *      "sv_c":   <float>,          // LN2 setpoint (°C)
+ *      "comm_ok": true|false       // RS-485 comm health (stubbed true for now)
+ *    },
+ *    "interlocks": {
+ *      "door_closed": true|false,
+ *      "estop_ok":    true|false,
+ *      "lid_locked":  true|false
+ *    }
+ *  }
  */
 
 // Bump PubSubClient max packet size to handle our JSON status frames
-// Default is 256; we need more because of pid + pid_ln2 + interlocks.
-// #define setBufferSize 512
+// Default in PubSubClient 2.8 is 256 bytes; we need more because of pid + pid_ln2 + interlocks.
+#define MQTT_MAX_PACKET_SIZE 512
 
 #include <Arduino.h>
 #include <PubSubClient.h>
@@ -66,8 +93,9 @@ static const char *MQTT_CMD_SUB_TOPIC = "mill/cmd/control";
 NetworkClient netClient;
 PubSubClient  mqttClient(netClient);
 
-// Debug option: echo JSON STATUS to Serial
-static const bool STATUS_SERIAL_DEBUG = true;
+// Debug option: echo JSON STATUS to Serial (length + JSON payload)
+// Set to true while debugging, false for normal operation.
+static const bool STATUS_SERIAL_DEBUG = false;
 
 // -------------------------------------------------------------------
 // Mill state machine
@@ -80,7 +108,7 @@ enum MillState {
   MILL_FAULT
 };
 
-MillState millState           = MILL_IDLE;
+MillState millState            = MILL_IDLE;
 MillState lastStateBeforeFault = MILL_IDLE;  // used for soft-fault logic
 
 // -------------------------------------------------------------------
@@ -169,8 +197,8 @@ bool allInterlocksOk() {
 bool lastInterlocksOk = false;
 
 // Fault metadata for Node-RED
-uint8_t fault_code    = 0;       // 0 = none; 1=ESTOP, 2=LID, 3=DOOR, 10=INTERLOCK
-String  fault_reason  = "";      // e.g. "ESTOP_OPEN", "LID_OPEN", etc.
+uint8_t fault_code   = 0;       // 0 = none; 1=ESTOP, 2=LID, 3=DOOR, 10=INTERLOCK
+String  fault_reason = "";      // e.g. "ESTOP_OPEN", "LID_OPEN", etc.
 
 // -------------------------------------------------------------------
 // MQTT timing
@@ -227,7 +255,7 @@ void checkInterlocks() {
 }
 
 // -------------------------------------------------------------------
-// publishStatus Debugging
+// publishStatus Debugging wrapper
 // -------------------------------------------------------------------
 
 bool publishStatusWithDebug(const char *topic, const char *payload) {
@@ -238,7 +266,6 @@ bool publishStatusWithDebug(const char *topic, const char *payload) {
   }
   return ok;
 }
-
 
 // -------------------------------------------------------------------
 // Cycle timer
@@ -413,25 +440,6 @@ void pollPidLn2() {
 // -------------------------------------------------------------------
 
 void publishStatus() {
-  // Build JSON string manually:
-  // {
-  //   "state": "IDLE",
-  //   "cycle_current": 0,
-  //   "cycle_target": 0,
-  //   "time_remaining_s": 0,
-  //   "cycle_total": 0,
-  //   "cycle_index": 0,
-  //   "fault_code": 0,
-  //   "fault_reason": "",
-  //   "pid": { "pv_c": 0.0 },
-  //   "pid_ln2": { "pv_c": ..., "sv_c": ..., "comm_ok": true },
-  //   "interlocks": {
-  //     "door_closed": true,
-  //     "estop_ok": true,
-  //     "lid_locked": true
-  //   }
-  // }
-
   String json;
   json.reserve(320);
 
@@ -513,15 +521,14 @@ void publishStatus() {
   json += "}";
 
   if (STATUS_SERIAL_DEBUG) {
-  Serial.print("[STATUS] len=");
-  Serial.println(json.length());
-  Serial.print("[STATUS] ");
-  Serial.println(json);
-}
+    Serial.print("[STATUS] len=");
+    Serial.println(json.length());
+    Serial.print("[STATUS] ");
+    Serial.println(json);
+  }
 
-// Use debug wrapper so we can see if MQTT actually sends
-publishStatusWithDebug(MQTT_STATUS_TOPIC, json.c_str());
-
+  // Use debug wrapper so we can see if MQTT actually sends
+  publishStatusWithDebug(MQTT_STATUS_TOPIC, json.c_str());
 }
 
 // -------------------------------------------------------------------
@@ -784,7 +791,7 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println();
-  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.10 (Ethernet + multi-cycle + fault & aux relays + LN2 PID stub)");
+  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.11 (Ethernet + multi-cycle + fault & aux relays + LN2 PID stub)");
 
   // RGB/Buzzer and local GPIO
   GPIO_Init();
@@ -808,9 +815,6 @@ void setup() {
   // MQTT client setup
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
-
-  // >>> ADD THIS <<<
-  mqttClient.setBufferSize(512);   // or 768/1024 if we grow JSON later
 
   // Initial interlock read
   checkInterlocks();
@@ -869,7 +873,12 @@ void loop() {
   }
 
   // --------------------------------------------------------------------
-  // 2) Interlock monitoring → FAULT on open
+  // 2) Cycle timer (advance RUN timing before we potentially enter FAULT)
+  // --------------------------------------------------------------------
+  updateCycleTimer();
+
+  // --------------------------------------------------------------------
+  // 3) Interlock monitoring → FAULT on open
   // --------------------------------------------------------------------
   checkInterlocks();
   bool currentOk = allInterlocksOk();
@@ -902,7 +911,7 @@ void loop() {
         cycle_index = 1;
       }
 
-      millState           = MILL_FAULT;
+      millState            = MILL_FAULT;
       lastStateBeforeFault = prevState;
 
       Serial.print("[SAFETY] Interlock opened → FAULT (");
@@ -916,11 +925,6 @@ void loop() {
 
   // we only clear the fault via RESET_FAULT when interlocks are OK
   lastInterlocksOk = currentOk;
-
-  // --------------------------------------------------------------------
-  // 3) Cycle timer
-  // --------------------------------------------------------------------
-  updateCycleTimer();
 
   // --------------------------------------------------------------------
   // 4) LN2 PID polling stub (once per PID_POLL_MS)
@@ -952,3 +956,4 @@ void loop() {
   // --------------------------------------------------------------------
   delay(10);
 }
+
