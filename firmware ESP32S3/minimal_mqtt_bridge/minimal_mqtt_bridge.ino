@@ -576,7 +576,7 @@ void handleCommand(const String &cmd) {
   }
 
   // ---------------------------------------------------------------
-  // START (or RESUME)
+  // START (fresh start) or RESUME from HOLD
   // ---------------------------------------------------------------
   if (cmd == "START") {
     Serial.println("[CMD] START received");
@@ -590,18 +590,43 @@ void handleCommand(const String &cmd) {
       return;
     }
 
-    millState        = MILL_RUN;
-    cycle_current    = 0;
-    time_remaining_s = cycle_target;
+    // Decide if this should be a RESUME (from HOLD) or a fresh START
+    bool resumeFromHold =
+      (millState == MILL_HOLD &&
+       cycle_total > 0 &&
+       cycle_target > 0 &&
+       cycle_index > 0 &&
+       cycle_current < cycle_target);
 
-    if (cycle_index == 0) {
-      cycle_index = 1;
+    if (resumeFromHold) {
+      // RESUME: keep cycle_current & time_remaining_s as frozen in HOLD
+      millState       = MILL_RUN;
+      lastCycleTickMs = millis();  // restart timing from "now"
+      Serial.print("[CMD] RESUME → RUN at t=");
+      Serial.print(cycle_current);
+      Serial.print(" / ");
+      Serial.print(cycle_target);
+      Serial.print(" s, cycle ");
+      Serial.print(cycle_index);
+      Serial.print(" / ");
+      Serial.println(cycle_total);
+    } else {
+      // Fresh START: reset timing
+      millState        = MILL_RUN;
+      cycle_current    = 0;
+      time_remaining_s = cycle_target;
+
+      if (cycle_index == 0) {
+        cycle_index = 1;
+      }
+      lastCycleTickMs = millis();
+
+      Serial.print("[CMD] START → RUN: cycle_target_s=");
+      Serial.print(cycle_target);
+      Serial.print(" total_cycles=");
+      Serial.println(cycle_total);
     }
-    lastCycleTickMs  = millis();
-    Serial.print("[CMD] START → RUN: cycle_target_s=");
-    Serial.print(cycle_target);
-    Serial.print(" total_cycles=");
-    Serial.println(cycle_total);
+
     lastStateBeforeFault = millState;
     return;
   }
@@ -640,6 +665,7 @@ void handleCommand(const String &cmd) {
   Serial.print("[CMD] Unknown command: ");
   Serial.println(cmd);
 }
+
 
 // -------------------------------------------------------------------
 // SET_CONFIG handler
