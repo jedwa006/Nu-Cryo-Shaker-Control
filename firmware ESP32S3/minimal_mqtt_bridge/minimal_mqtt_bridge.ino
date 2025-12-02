@@ -49,10 +49,6 @@
  *  }
  */
 
-// Bump PubSubClient max packet size to handle our JSON status frames
-// Default in PubSubClient 2.8 is 256 bytes; we need more because of pid + pid_ln2 + interlocks.
-#define MQTT_MAX_PACKET_SIZE 512
-
 #include <Arduino.h>
 #include <PubSubClient.h>
 
@@ -815,6 +811,8 @@ void setup() {
   // MQTT client setup
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
+  // >>> Configures PubSubClient for a larger msg size, needed for RICH payloads (currently 512 or larger) <<<
+  mqttClient.setBufferSize(512);   // or 768/1024 if we grow JSON later
 
   // Initial interlock read
   checkInterlocks();
