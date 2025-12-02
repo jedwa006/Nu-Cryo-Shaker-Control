@@ -22,24 +22,26 @@
  *          for future RS-485 / Modbus integration, keep legacy pid.pv_c.
  *  v0.11 – Housekeeping: JSON schema doc, default status debug off,
  *          keep MQTT buffer override and LN2 stub stable for Node-RED.
+ *  v0.12 – Switch LN2 polling to real LC108 Modbus RTU over Serial1 RS-485,
+ *          no WS_RS485 task, pid_ln2.comm_ok reflects actual comm status.
  *
  * Status JSON schema (mill/status/state):
  *  {
  *    "state": "IDLE" | "RUN" | "HOLD" | "FAULT",
- *    "cycle_current": <uint>,      // seconds elapsed in current cycle
- *    "cycle_target":  <uint>,      // seconds per cycle
- *    "time_remaining_s": <uint>,   // seconds remaining in current cycle
- *    "cycle_total":   <uint>,      // requested total cycles in recipe
- *    "cycle_index":   <uint>,      // 0 when idle, 1..cycle_total when running/completed
- *    "fault_code":    <uint>,      // 0 = none; 1=ESTOP, 2=LID, 3=DOOR, 10=INTERLOCK
- *    "fault_reason":  "<string>",  // e.g. "LID_OPEN"
+ *    "cycle_current":    <uint>,      // seconds elapsed in current cycle
+ *    "cycle_target":     <uint>,      // seconds per cycle
+ *    "time_remaining_s": <uint>,      // seconds remaining in current cycle
+ *    "cycle_total":      <uint>,      // requested total cycles in recipe
+ *    "cycle_index":      <uint>,      // 0 when idle, 1..cycle_total when running/completed
+ *    "fault_code":       <uint>,      // 0 = none; 1=ESTOP, 2=LID, 3=DOOR, 10=INTERLOCK
+ *    "fault_reason":     "<string>",  // e.g. "LID_OPEN"
  *    "pid": {
- *      "pv_c": <float>             // legacy LN2 PV for existing UI (°C)
+ *      "pv_c": <float>               // legacy LN2 PV for existing UI (°C)
  *    },
  *    "pid_ln2": {
- *      "pv_c":   <float>,          // LN2 PV (°C)
- *      "sv_c":   <float>,          // LN2 setpoint (°C)
- *      "comm_ok": true|false       // RS-485 comm health (stubbed true for now)
+ *      "pv_c":   <float>,            // LN2 PV (°C), from LC108 Modbus
+ *      "sv_c":   <float>,            // LN2 setpoint (°C), from LC108 Modbus
+ *      "comm_ok": true|false         // RS-485 comm health for last poll
  *    },
  *    "interlocks": {
  *      "door_closed": true|false,
@@ -57,7 +59,17 @@
 #include "WS_Relay.h"
 #include "I2C_Driver.h"
 #include "WS_ETH.h"
-#include "WS_RS485.h"   // <-- ADD THIS
+
+// -------------------------------------------------------------------
+// RS-485 / Serial1 for LC108 controllers
+// -------------------------------------------------------------------
+
+// Use the RXD1/TXD1 macros from WS_GPIO.h (ESP32-S3 pins for Serial1)
+static const int RS485_RX_PIN   = RXD1;
+static const int RS485_TX_PIN   = TXD1;
+// If your RS-485 transceiver has DE/RE, you can add a pin here later.
+// For now we assume auto-direction control on the transceiver.
+HardwareSerial &rs485 = Serial1;
 
 // -------------------------------------------------------------------
 // Externals from Waveshare libs
@@ -70,9 +82,6 @@ extern bool DIN_Read_CH3(void);
 
 // Auto DIN→relay mapping flag we want OFF
 extern bool Relay_Immediate_Enable;
-
-// Extern from WS_RS485.cpp – this is the actual Serial1 instance used for RS-485
-extern HardwareSerial lidarSerial;
 
 // -------------------------------------------------------------------
 // Network / MQTT configuration
@@ -128,7 +137,7 @@ bool door_closed = false;
 bool mirror_door_to_lid = true;
 
 // -------------------------------------------------------------------
-// PID snapshots (LN2 – stub for now)
+// PID snapshots (LN2 – via LC108 Modbus)
 // -------------------------------------------------------------------
 
 struct PidSnapshot {
@@ -144,14 +153,19 @@ PidSnapshot pid_ln2 = { false, 0.0f, 0.0f, 0.0f };
 float ln2_pv_c = 0.0f;
 
 // -------------------------------------------------------------------
-// LC108 (LN2 Controller) Modbus COnfiguration (LN2 channel)
+// LC108 (LN2 Controller) Modbus configuration (LN2 channel)
 // -------------------------------------------------------------------
 
-static const uint8_t  LC108_LN2_ADDR = 3;   // your LN2 controller unit ID
-static const uint16_t LC108_REG_PV   = 1;   // PV (°C × 10)  – holding register
-static const uint16_t LC108_REG_SV   = 6;   // SV (°C × 10)  – holding register
-static const uint32_t LC108_TIMEOUT_MS = 50; // per-request timeout
+// LN2 controller is Modbus ID 3 on the shared RS-485 bus
+static const uint8_t  LC108_LN2_ADDR    = 3;
 
+// LC108 manual uses 1-based register numbering; Modbus FC03 uses 0-based
+// addresses. If the PV is register 1, SV is register 6 in the manual,
+// their FC03 addresses are 0 and 5 respectively.
+static const uint16_t LC108_REG_PV_ADDR = 0;   // PV  (°C × 10), register 1 → address 0
+static const uint16_t LC108_REG_SV_ADDR = 5;   // SV  (°C × 10), register 6 → address 5
+
+static const uint32_t LC108_TIMEOUT_MS  = 50;  // per-request timeout
 
 // -------------------------------------------------------------------
 // Cycle timing
@@ -223,11 +237,11 @@ const unsigned long MQTT_RECONNECT_MS  = 2000;  // 2 s
 bool lastMqttConnected = false;
 
 // -------------------------------------------------------------------
-// PID polling timing (LN2 stub)
+// PID polling timing (LN2 via Modbus)
 // -------------------------------------------------------------------
 
 unsigned long lastPidPollMs = 0;
-const unsigned long PID_POLL_MS = 1000;  // 1 s poll for LN2 PID (stub for now)
+const unsigned long PID_POLL_MS = 1000;  // 1 s poll for LN2 PID
 
 // -------------------------------------------------------------------
 // Forward declarations
@@ -244,7 +258,15 @@ void updateRelayFromState();
 void updateFaultRelayFromState();
 void updateLn2RelayFromState();
 void updateFanRelayFromState();
-void pollPidLn2();   // new stub for LN2 PV
+void pollPidLn2();
+
+// Modbus helpers
+uint16_t modbus_crc16(const uint8_t *data, uint16_t len);
+bool lc108_read_holding(uint8_t slave,
+                        uint16_t reg,
+                        uint16_t count,
+                        uint16_t *out);
+bool lc108_read_u16(uint8_t addr, uint16_t reg, uint16_t *out);
 
 // -------------------------------------------------------------------
 // Interlocks
@@ -419,7 +441,7 @@ void updateFanRelayFromState() {
 // LC108: Read holding registers via RS-485 (function 0x03)
 //
 // slave   = Modbus device address (1..247)
-// reg     = start register address
+// reg     = start register *address* (0-based)
 // count   = number of 16-bit registers
 // out[]   = caller-provided array of length >= count
 //
@@ -447,39 +469,54 @@ bool lc108_read_holding(uint8_t slave,
   req[7] = (crc >> 8) & 0xFF;
 
   // Clear any stale bytes in RX buffer
-  while (lidarSerial.available()) {
-    (void)lidarSerial.read();
+  while (rs485.available()) {
+    (void)rs485.read();
   }
 
   // Send request
-  lidarSerial.write(req, sizeof(req));
-  lidarSerial.flush();
+  rs485.write(req, sizeof(req));
+  rs485.flush();
 
   // Expected response:
   // [slave][0x03][byteCount][data ...][CRClo][CRChi]
   // byteCount = 2 * count
-  uint8_t expectedLen = 5 + 2 * count;
+  const uint8_t expectedByteCount = 2 * count;
+  const uint8_t expectedLen       = 5 + expectedByteCount;
   if (expectedLen > 64) {
     return false;  // safety
   }
 
   uint8_t resp[64];
-  size_t  got = lidarSerial.readBytes(resp, expectedLen);
+  size_t  got = rs485.readBytes(resp, expectedLen);
 
   if (got != expectedLen) {
     // Timeout / short frame
+    Serial.print("[LC108] read_holding: short read got=");
+    Serial.print(got);
+    Serial.print(" expected=");
+    Serial.println(expectedLen);
     return false;
   }
 
   // Check header
-  if (resp[0] != slave || resp[1] != 0x03 || resp[2] != (2 * count)) {
+  if (resp[0] != slave || resp[1] != 0x03 || resp[2] != expectedByteCount) {
+    Serial.print("[LC108] read_holding: bad header id=");
+    Serial.print(resp[0]);
+    Serial.print(" func=");
+    Serial.print(resp[1]);
+    Serial.print(" bc=");
+    Serial.println(resp[2]);
     return false;
   }
 
   // Check CRC
-  uint16_t crcRx = resp[expectedLen - 2] | (uint16_t(resp[expectedLen - 1]) << 8);
+  uint16_t crcRx   = resp[expectedLen - 2] | (uint16_t(resp[expectedLen - 1]) << 8);
   uint16_t crcCalc = modbus_crc16(resp, expectedLen - 2);
   if (crcRx != crcCalc) {
+    Serial.print("[LC108] read_holding: CRC mismatch resp=0x");
+    Serial.print(crcRx, HEX);
+    Serial.print(" calc=0x");
+    Serial.println(crcCalc, HEX);
     return false;
   }
 
@@ -515,104 +552,22 @@ uint16_t modbus_crc16(const uint8_t *data, uint16_t len) {
 // -------------------------------------------------------------------
 // Low-level: read one holding register (function 0x03) as uint16_t
 //  addr  = slave address
-//  reg   = starting register number (as in LC108 manual / your map)
+//  reg   = starting register *address* (0-based)
 //  out   = filled with raw 16-bit value on success
 // Returns true on success, false on timeout/CRC/protocol error.
 // -------------------------------------------------------------------
 bool lc108_read_u16(uint8_t addr, uint16_t reg, uint16_t *out) {
   if (!out) return false;
 
-  // Flush any stale bytes
-  while (lidarSerial.available()) {
-    (void)lidarSerial.read();
-  }
-
-  // Build Modbus RTU request: [addr][0x03][reg_hi][reg_lo][qty_hi][qty_lo][crc_lo][crc_hi]
-  uint8_t req[8];
-  req[0] = addr;
-  req[1] = 0x03;           // Read Holding Registers
-  req[2] = reg >> 8;
-  req[3] = reg & 0xFF;
-  req[4] = 0x00;
-  req[5] = 0x01;           // quantity = 1 register
-
-  uint16_t crc = modbus_crc16(req, 6);
-  req[6] = crc & 0xFF;     // CRC low byte
-  req[7] = crc >> 8;       // CRC high byte
-
-  lidarSerial.write(req, sizeof(req));
-  lidarSerial.flush();
-
-  // Read response
-  uint8_t  resp[32];
-  uint16_t idx = 0;
-  unsigned long start = millis();
-
-  while ((millis() - start) < LC108_TIMEOUT_MS) {
-    while (lidarSerial.available()) {
-      if (idx < sizeof(resp)) {
-        resp[idx++] = lidarSerial.read();
-      } else {
-        // overflow, give up
-        break;
-      }
-    }
-  }
-
-  // Minimum Modbus RTU response for 1 register: 1(addr)+1(func)+1(byteCnt)+2(data)+2(CRC) = 7 bytes
-  if (idx < 7) {
-    // Serial.println("[LC108] Response too short");
+  uint16_t tmp = 0;
+  if (!lc108_read_holding(addr, reg, 1, &tmp)) {
     return false;
   }
 
-  // Basic protocol checks
-  if (resp[0] != addr) {
-    // Serial.println("[LC108] Address mismatch");
-    return false;
-  }
-
-  // Exception response?
-  if (resp[1] & 0x80) {
-    // Serial.print("[LC108] Exception code "); Serial.println(resp[2]);
-    return false;
-  }
-
-  if (resp[1] != 0x03) {
-    // Serial.println("[LC108] Function code mismatch");
-    return false;
-  }
-
-  uint8_t byteCount = resp[2];
-  if (byteCount < 2) {
-    // Serial.println("[LC108] Byte count too small");
-    return false;
-  }
-
-  // CRC check over everything except last 2 bytes
-  uint16_t respCrc = (uint16_t)resp[idx - 2] | ((uint16_t)resp[idx - 1] << 8);
-  uint16_t calcCrc = modbus_crc16(resp, idx - 2);
-  if (respCrc != calcCrc) {
-    // Serial.println("[LC108] CRC mismatch");
-    return false;
-  }
-
-  // Parse the one 16-bit register (big-endian)
-  *out = (uint16_t)resp[3] << 8 | (uint16_t)resp[4];
+  *out = tmp;
   return true;
 }
 
-// -------------------------------------------------------------------
-// LN2 PID polling (real LC108 over RS-485)
-//
-// Reads PV + SV from LC108 Modbus device 3.
-// On success:
-//   - pid_ln2.comm_ok = true
-//   - pid_ln2.pv_c, pid_ln2.sv_c updated (°C)
-//   - ln2_pv_c kept in sync for legacy "pid.pv_c" UI binding
-// On failure:
-//   - pid_ln2.comm_ok = false
-//   - pv/sv left at last-known values
-// -------------------------------------------------------------------
 // -------------------------------------------------------------------
 // LN2 PID polling (real LC108 over RS-485 / Modbus RTU)
 //
@@ -623,12 +578,13 @@ void pollPidLn2() {
   uint16_t pvRaw = 0;
   uint16_t svRaw = 0;
 
-  bool okPv = lc108_read_u16(LC108_LN2_ADDR, LC108_REG_PV, &pvRaw);
-  bool okSv = lc108_read_u16(LC108_LN2_ADDR, LC108_REG_SV, &svRaw);
+  bool okPv = lc108_read_u16(LC108_LN2_ADDR, LC108_REG_PV_ADDR, &pvRaw);
+  bool okSv = lc108_read_u16(LC108_LN2_ADDR, LC108_REG_SV_ADDR, &svRaw);
 
   if (!(okPv && okSv)) {
     pid_ln2.comm_ok = false;
     // Keep last known pv_c / sv_c, but flag comm fault
+    Serial.println("[LC108] pollPidLn2: comm error (timeout, bad header, or CRC)");
     return;
   }
 
@@ -643,8 +599,13 @@ void pollPidLn2() {
 
   // Keep legacy scalar in sync for any old wiring
   ln2_pv_c = pid_ln2.pv_c;
-}
 
+  Serial.print("[LC108] PV=");
+  Serial.print(pid_ln2.pv_c);
+  Serial.print("°C  SV=");
+  Serial.print(pid_ln2.sv_c);
+  Serial.println("°C  (ID=3)");
+}
 
 // -------------------------------------------------------------------
 // Status JSON publish
@@ -881,7 +842,6 @@ void handleCommand(const String &cmd) {
   Serial.println(cmd);
 }
 
-
 // -------------------------------------------------------------------
 // SET_CONFIG handler
 // -------------------------------------------------------------------
@@ -1028,7 +988,7 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println();
-  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.11 (Ethernet + multi-cycle + fault & aux relays + LN2 PID stub)");
+  Serial.println("Nu-Cryo minimal_mqtt_bridge v0.12 (Ethernet + cycles + relays + LN2 Modbus PV/SV)");
 
   // RGB/Buzzer and local GPIO
   GPIO_Init();
@@ -1050,14 +1010,14 @@ void setup() {
   ETH.config(ETH_LOCAL_IP, ETH_GATEWAY, ETH_SUBNET, ETH_DNS);
 
   // Bring up RS-485 serial (Serial1) for LC108 Modbus
-  lidarSerial.begin(9600, SERIAL_8N1, RXD1, TXD1);  // RXD1/TXD1 from WS_GPIO.h
-  lidarSerial.setTimeout(LC108_TIMEOUT_MS);
+  rs485.begin(9600, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
+  rs485.setTimeout(LC108_TIMEOUT_MS);
 
   // MQTT client setup
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
-  // >>> Configures PubSubClient for a larger msg size, needed for RICH payloads (currently 512 or larger) <<<
-  mqttClient.setBufferSize(512);   // or 768/1024 if we grow JSON later
+  // Larger MQTT packet size for richer JSON payloads
+  mqttClient.setBufferSize(512);   // bump to 768/1024 later if JSON grows
 
   // Initial interlock read
   checkInterlocks();
@@ -1170,7 +1130,7 @@ void loop() {
   lastInterlocksOk = currentOk;
 
   // --------------------------------------------------------------------
-  // 4) LN2 PID polling stub (once per PID_POLL_MS)
+  // 4) LN2 PID polling (real LC108 Modbus, once per PID_POLL_MS)
   // --------------------------------------------------------------------
   if (now - lastPidPollMs >= PID_POLL_MS) {
     lastPidPollMs = now;
@@ -1199,4 +1159,3 @@ void loop() {
   // --------------------------------------------------------------------
   delay(10);
 }
-
