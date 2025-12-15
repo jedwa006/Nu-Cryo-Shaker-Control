@@ -1,1 +1,12 @@
+# PlatformIO
+**/.pio/
+**/.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
 .DS_Store
+
+# Logs
+*.log
