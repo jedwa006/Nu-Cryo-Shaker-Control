@@ -1,0 +1,132 @@
+[
+    {
+        "id": "b7cc97ad63cea129",
+        "type": "ui-number-input",
+        "z": "0a0f744889ace823",
+        "group": "41118e74eb296dfe",
+        "name": "Cycles",
+        "label": "Cycles",
+        "order": 7,
+        "width": 0,
+        "height": 2,
+        "topic": "cycle_count",
+        "topicType": "str",
+        "min": 0,
+        "max": 10,
+        "step": 1,
+        "tooltip": "",
+        "passthru": true,
+        "sendOnBlur": true,
+        "sendOnEnter": true,
+        "className": "",
+        "clearable": false,
+        "icon": "",
+        "iconPosition": "left",
+        "iconInnerPosition": "inside",
+        "spinner": "default",
+        "x": 1690,
+        "y": 1420,
+        "wires": [
+            [
+                "4e7509e7253a06c1"
+            ]
+        ]
+    },
+    {
+        "id": "41118e74eb296dfe",
+        "type": "ui-group",
+        "name": "Controls",
+        "page": "8fb3161a8a73ca82",
+        "width": "2",
+        "height": "2",
+        "order": 1,
+        "showTitle": true,
+        "className": "",
+        "visible": "true",
+        "disabled": "false",
+        "groupType": "default"
+    },
+    {
+        "id": "8fb3161a8a73ca82",
+        "type": "ui-page",
+        "name": "Mill Control",
+        "ui": "87e85691c3493f27",
+        "path": "/mill",
+        "icon": "home",
+        "layout": "grid",
+        "theme": "c83567693090d54c",
+        "breakpoints": [
+            {
+                "name": "Default",
+                "px": "0",
+                "cols": "3"
+            },
+            {
+                "name": "Tablet",
+                "px": "576",
+                "cols": "6"
+            },
+            {
+                "name": "Small Desktop",
+                "px": "768",
+                "cols": "9"
+            },
+            {
+                "name": "Desktop",
+                "px": "1024",
+                "cols": "12"
+            }
+        ],
+        "order": 1,
+        "className": "",
+        "visible": true,
+        "disabled": false
+    },
+    {
+        "id": "87e85691c3493f27",
+        "type": "ui-base",
+        "name": "My Dashboard",
+        "path": "/dashboard",
+        "appIcon": "",
+        "includeClientData": true,
+        "acceptsClientConfig": [
+            "ui-notification",
+            "ui-control"
+        ],
+        "showPathInSidebar": false,
+        "headerContent": "page",
+        "navigationStyle": "default",
+        "titleBarStyle": "default",
+        "showReconnectNotification": true,
+        "notificationDisplayTime": 1,
+        "showDisconnectNotification": true,
+        "allowInstall": false
+    },
+    {
+        "id": "c83567693090d54c",
+        "type": "ui-theme",
+        "name": "Default Theme",
+        "colors": {
+            "surface": "#4e97b7",
+            "primary": "#ffbb00",
+            "bgPage": "#787878",
+            "groupBg": "#2e2e2e",
+            "groupOutline": "#cccccc"
+        },
+        "sizes": {
+            "density": "default",
+            "pagePadding": "12px",
+            "groupGap": "12px",
+            "groupBorderRadius": "4px",
+            "widgetGap": "12px"
+        }
+    },
+    {
+        "id": "089106f989d6bad4",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "@flowfuse/node-red-dashboard": "1.29.0"
+        }
+    }
+]
