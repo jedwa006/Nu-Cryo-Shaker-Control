@@ -24,11 +24,16 @@ static constexpr uint32_t PID_PARAMS_PERIOD_MS     = 5000;  // slow
 static constexpr uint32_t IO_STATE_PERIOD_MS       = 200;
 
 // -------- Ethernet (W5500) --------
-// These pins MUST match the Waveshare board's W5500 wiring.
-// Keep them here so you can align to Waveshare example code without contaminating core logic.
-static constexpr int W5500_CS_PIN  = 10;  // TODO: set
-static constexpr int W5500_RST_PIN = -1;  // TODO: set (-1 if none)
-static constexpr int W5500_INT_PIN = -1;  // TODO: set (-1 if none)
+// Waveshare ESP32-S3-ETH-8DI-8RO wiring (from WS_ETH.h)
+static constexpr int W5500_CS_PIN   = 16;  // ETH_PHY_CS
+static constexpr int W5500_INT_PIN  = 12;  // ETH_PHY_IRQ
+static constexpr int W5500_RST_PIN  = 39;  // ETH_PHY_RST
+
+// Dedicated SPI bus pins used on the Waveshare board for W5500
+static constexpr int W5500_SCK_PIN  = 15;
+static constexpr int W5500_MISO_PIN = 14;
+static constexpr int W5500_MOSI_PIN = 13;
+
 
 // Optional: static IP for the ESP side. If all zeros, DHCP is used.
 struct Ip4 { uint8_t a,b,c,d; };

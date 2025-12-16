@@ -2,271 +2,189 @@
     #include <Arduino.h>
 
     #include <SPI.h>
-    #if NUCRYO_USE_ETH_W5500
-      #include <Ethernet.h>
-    #endif
+    #include <ETH.h>
+    #include <Network.h>
 
     #include <PubSubClient.h>
     #include <ArduinoJson.h>
 
-    #if NUCRYO_USE_MODBUS_RTU
-      #include <HardwareSerial.h>
-      #include <ModbusRTU.h>
-    #endif
-
     #include "app/app_config.h"
     #include "core/health_manager.h"
     #include "core/mqtt_bus.h"
-    #include "core/publishers.h"
 
+    #if NUCRYO_USE_MODBUS_RTU
     #include "components/pid_modbus.h"
-    #if NUCRYO_ENABLE_ADXL345
-      #include "components/adxl345.h"
-    #endif
-
-    // ------------ Networking ------------
-    #if NUCRYO_USE_ETH_W5500
-    static byte mac_addr[6];
-    EthernetClient eth_client;
-    #endif
-
-    PubSubClient mqtt_client;
-    MqttBus bus;
-
-    // ------------ Modbus ------------
-    #if NUCRYO_USE_MODBUS_RTU
-    HardwareSerial RS485(1);
-    ModbusRTU mb;
-    #endif
-
-    // ------------ Components ------------
-    HealthManager hm;
-
-    #if NUCRYO_USE_MODBUS_RTU
-    PidModbusComponent pid_heat1("heat1", PID_HEAT1_ID, mb);
-    PidModbusComponent pid_heat2("heat2", PID_HEAT2_ID, mb);
-    PidModbusComponent pid_cool1("cool1", PID_COOL1_ID, mb);
     #endif
 
     #if NUCRYO_ENABLE_ADXL345
-    Adxl345Component adxl(Wire, 0x53);
+    #include "components/adxl345.h"
     #endif
 
-    // ------------ Timers ------------
-    static uint32_t t_heartbeat=0, t_syshealth=0, t_comphealth=0, t_pid=0;
+    // --- Networking state ---
+    static bool g_eth_connected = false;
+    static NetworkClient g_net_client;
+    static PubSubClient g_mqtt(g_net_client);
 
-    static void make_mac_from_efuse(byte out[6]) {
-      uint64_t id = ESP.getEfuseMac();
-      out[0] = (id >> 40) & 0xFF;
-      out[1] = (id >> 32) & 0xFF;
-      out[2] = (id >> 24) & 0xFF;
-      out[3] = (id >> 16) & 0xFF;
-      out[4] = (id >>  8) & 0xFF;
-      out[5] = (id >>  0) & 0xFF;
-      out[0] |= 0x02; // locally administered
-      out[0] &= 0xFE; // unicast
-    }
+    // --- Core objects ---
+    static HealthManager g_health;
+    static MqttBus g_bus(g_mqtt);
 
-    static void eth_begin() {
-    #if NUCRYO_USE_ETH_W5500
-      make_mac_from_efuse(mac_addr);
-      Ethernet.init(W5500_CS_PIN);
-
-      if (ETH_STATIC_IP.a != 0) {
-        IPAddress ip(ETH_STATIC_IP.a, ETH_STATIC_IP.b, ETH_STATIC_IP.c, ETH_STATIC_IP.d);
-        IPAddress gw(ETH_STATIC_GW.a, ETH_STATIC_GW.b, ETH_STATIC_GW.c, ETH_STATIC_GW.d);
-        IPAddress mask(ETH_STATIC_MASK.a, ETH_STATIC_MASK.b, ETH_STATIC_MASK.c, ETH_STATIC_MASK.d);
-        Ethernet.begin(mac_addr, ip, gw, gw, mask);
-      } else {
-        Ethernet.begin(mac_addr); // DHCP
-      }
-
-      delay(200);
-    #endif
-    }
-
-    static bool mqtt_connect() {
-      mqtt_client.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
-
-      char client_id[48];
-      snprintf(client_id, sizeof(client_id), "nucryo-%s-%lu", NODE_ID, (unsigned long)ESP.getEfuseMac());
-
-      bool ok;
-      if (strlen(MQTT_USERNAME) > 0) {
-        ok = mqtt_client.connect(client_id, MQTT_USERNAME, MQTT_PASSWORD,
-                                 (String(MACHINE_ID)+"/"+NODE_ID+"/sys/status").c_str(),
-                                 1, true, "offline");
-      } else {
-        ok = mqtt_client.connect(client_id,
-                                 (String(MACHINE_ID)+"/"+NODE_ID+"/sys/status").c_str(),
-                                 1, true, "offline");
-      }
-
-      if (ok) {
-        StaticJsonDocument<128> birth;
-        birth["v"] = NUCRYO_SCHEMA_V;
-        birth["ts_ms"] = millis();
-        birth["src"] = NODE_ID;
-        birth["status"] = "online";
-        bus.publish_json("sys/birth", birth, true, 1);
-
-        // retained "online" status
-        mqtt_client.publish((String(MACHINE_ID)+"/"+NODE_ID+"/sys/status").c_str(),
-                            (const uint8_t*)"online", 6, true);
-
-        // Subscribe to PID SV commands (extend later)
-        bus.subscribe("pid/+/cmd/#", 1);
-      }
-      return ok;
-    }
-
-    // Minimal command handler: pid/<name>/cmd/sv with {"cmd_id":..., "value":...}
-    static void on_mqtt_message(const char* topic, const uint8_t* payload, size_t len) {
-      StaticJsonDocument<256> doc;
-      DeserializationError err = deserializeJson(doc, payload, len);
-      if (err) return;
-
-      const uint32_t cmd_id = doc["cmd_id"] | 0;
-      const float value = doc["value"] | 0.0f;
-
-      const uint32_t now_ms = millis();
-
-      // Parse which PID by topic string
-      // Expected: "<machine>/<node>/pid/<pid_name>/cmd/sv"
-      const String t(topic);
-      const String prefix = String(MACHINE_ID) + "/" + NODE_ID + "/pid/";
-      if (!t.startsWith(prefix)) return;
-
-      const int p0 = prefix.length();
-      const int p1 = t.indexOf('/', p0);
-      if (p1 < 0) return;
-      const String pid_name = t.substring(p0, p1);
-
+    // --- Components (example set) ---
     #if NUCRYO_USE_MODBUS_RTU
-      bool ok = false;
-      if (pid_name == "heat1") ok = pid_heat1.set_sv(value, now_ms);
-      else if (pid_name == "heat2") ok = pid_heat2.set_sv(value, now_ms);
-      else if (pid_name == "cool1") ok = pid_cool1.set_sv(value, now_ms);
+    static PidModbusComponent pid_heat1("heat1");
+    static PidModbusComponent pid_heat2("heat2");
+    static PidModbusComponent pid_cool1("cool1");
+    #endif
 
-      StaticJsonDocument<256> ack;
-      ack["v"] = NUCRYO_SCHEMA_V;
-      ack["ts_ms"] = now_ms;
-      ack["src"] = NODE_ID;
-      ack["cmd_id"] = cmd_id;
-      ack["ok"] = ok;
-      ack["err"] = ok ? "" : "write_failed";
-      if (ok) ack["applied"]["sv"] = value;
+    static void on_eth_event(arduino_event_id_t event)
+    {
+      // WARNING: Network.onEvent is called from another FreeRTOS task.
+      switch (event) {
+        case ARDUINO_EVENT_ETH_START:
+          Serial.println("[eth] start");
+          // Must be set after interface is started but before DHCP.
+          ETH.setHostname("nu-cryo-esp32s3");
+          break;
 
-      char subtopic[64];
-      snprintf(subtopic, sizeof(subtopic), "pid/%s/ack", pid_name.c_str());
-      bus.publish_json(subtopic, ack, false, 1);
+        case ARDUINO_EVENT_ETH_CONNECTED:
+          Serial.println("[eth] link up");
+          break;
+
+        case ARDUINO_EVENT_ETH_GOT_IP:
+          Serial.print("[eth] got ip: ");
+          Serial.println(ETH.localIP());
+          g_eth_connected = true;
+          break;
+
+        case ARDUINO_EVENT_ETH_LOST_IP:
+          Serial.println("[eth] lost ip");
+          g_eth_connected = false;
+          break;
+
+        case ARDUINO_EVENT_ETH_DISCONNECTED:
+          Serial.println("[eth] link down");
+          g_eth_connected = false;
+          break;
+
+        case ARDUINO_EVENT_ETH_STOP:
+          Serial.println("[eth] stop");
+          g_eth_connected = false;
+          break;
+
+        default:
+          break;
+      }
+    }
+
+    static void eth_begin()
+    {
+    #if NUCRYO_USE_ETH_W5500
+      Network.onEvent(on_eth_event);
+
+      // W5500 lives on a dedicated SPI pin set on this board.
+      SPI.begin(W5500_SCK_PIN, W5500_MISO_PIN, W5500_MOSI_PIN);
+
+      // Bring up W5500 using Arduino-ESP32 lwIP Ethernet
+      // phy_addr is typically 1 for W5500 in Arduino-ESP32 examples for SPI PHY.
+      ETH.begin(ETH_PHY_W5500, /*phy_addr*/ 1, W5500_CS_PIN, W5500_INT_PIN, W5500_RST_PIN, SPI);
     #endif
     }
 
-    void setup() {
+    static bool mqtt_connect(uint32_t now_ms)
+    {
+      g_mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
+
+    #if defined(MQTT_MAX_PACKET_SIZE)
+      // PubSubClient also supports setBufferSize() at runtime; keep both safe.
+      g_mqtt.setBufferSize(MQTT_MAX_PACKET_SIZE);
+    #endif
+
+      // LWT helps the UI detect link loss / resets
+      StaticJsonDocument<128> lwt;
+      lwt["v"] = NUCRYO_SCHEMA_V;
+      lwt["ts_ms"] = now_ms;
+      lwt["state"] = "offline";
+      char lwt_buf[128];
+      size_t n = serializeJson(lwt, lwt_buf, sizeof(lwt_buf));
+
+      return g_mqtt.connect(NODE_ID, MQTT_TOPIC_LWT, /*qos*/ 1, /*retain*/ true, lwt_buf, n);
+    }
+
+    static void publish_boot(uint32_t now_ms)
+    {
+      StaticJsonDocument<192> doc;
+      doc["v"] = NUCRYO_SCHEMA_V;
+      doc["ts_ms"] = now_ms;
+      doc["node"] = NODE_ID;
+      doc["fw"] = "nu_cryo_control_pio";
+      doc["eth"] = g_eth_connected;
+      doc["ip"] = ETH.localIP().toString();
+
+      g_bus.publish_json(MQTT_TOPIC_BOOT, doc, /*retain*/ true);
+    }
+
+    void setup()
+    {
       Serial.begin(115200);
-      delay(200);
+      delay(50);
+      Serial.println("\n[nu-cryo] boot");
 
-      // --- I2C ---
-      Wire.begin();
+      // Configure health policy
+      g_health.configure_component("eth", /*expected*/ true, /*required*/ true);
 
-      // --- Ethernet ---
+    #if NUCRYO_USE_MODBUS_RTU
+      g_health.configure_component("pid_heat1", true, true);
+      g_health.configure_component("pid_heat2", true, true);
+      g_health.configure_component("pid_cool1", true, true);
+    #endif
+
+    #if NUCRYO_ENABLE_ADXL345
+      g_health.configure_component("adxl345", true, false); // expected, but optional
+    #else
+      g_health.configure_component("adxl345", false, false);
+    #endif
+
       eth_begin();
 
-      // --- MQTT ---
-    #if NUCRYO_USE_ETH_W5500
-      mqtt_client.setClient(eth_client);
-    #endif
-      bus.begin(mqtt_client, MACHINE_ID, NODE_ID);
-      bus.set_handler(on_mqtt_message);
-
-      // --- Modbus RTU ---
-    #if NUCRYO_USE_MODBUS_RTU
-      RS485.begin(MODBUS_BAUD, SERIAL_8N1, MODBUS_RX_PIN, MODBUS_TX_PIN);
-      mb.begin(&RS485, MODBUS_DE_RE_PIN);
-      mb.master();
-    #endif
-
-      // --- Register components with HealthManager ---
-    #if NUCRYO_USE_MODBUS_RTU
-      pid_heat1.configure(true, true);
-      pid_heat2.configure(true, true);
-      pid_cool1.configure(true, true);
-      hm.add(&pid_heat1);
-      hm.add(&pid_heat2);
-      hm.add(&pid_cool1);
-    #endif
-
-    #if NUCRYO_ENABLE_ADXL345
-      adxl.configure(true, false);   // expected optional
-      hm.add(&adxl);
-    #endif
-
-      // initial probe so UI has immediate visibility
-      const uint32_t now_ms = millis();
-      for (size_t i=0; i<hm.count(); ++i) {
-        auto* c = hm.component(i);
-        if (c) c->probe(now_ms);
-      }
-
-      // connect MQTT (retry in loop if down)
-      mqtt_connect();
-
-      t_heartbeat = t_syshealth = t_comphealth = t_pid = now_ms;
+      // Initialize MQTT routing (commands, etc.)
+      g_bus.begin();
     }
 
-    void loop() {
+    void loop()
+    {
       const uint32_t now_ms = millis();
 
-      // MQTT reconnect policy (simple). Add exponential backoff later if desired.
-      if (!mqtt_client.connected()) {
-        mqtt_connect();
-      }
-      bus.loop();
-
-      // tick components
-    #if NUCRYO_USE_MODBUS_RTU
-      mb.task();
-      pid_heat1.tick(now_ms);
-      pid_heat2.tick(now_ms);
-      pid_cool1.tick(now_ms);
-    #endif
-
-    #if NUCRYO_ENABLE_ADXL345
-      adxl.tick(now_ms);
-    #endif
-
-      // evaluate aggregate health
-      hm.evaluate(now_ms);
-
-      // publish heartbeat
-      if ((now_ms - t_heartbeat) >= HEARTBEAT_PERIOD_MS) {
-        publishers::publish_heartbeat(bus, now_ms, now_ms/1000);
-        t_heartbeat = now_ms;
-      }
-
-      // publish system health
-      if ((now_ms - t_syshealth) >= SYS_HEALTH_PERIOD_MS) {
-        publishers::publish_system_health(bus, hm.system_health(), now_ms);
-        t_syshealth = now_ms;
-      }
-
-      // publish component health
-      if ((now_ms - t_comphealth) >= COMPONENT_HEALTH_PERIOD_MS) {
-        for (size_t i=0; i<hm.count(); ++i) {
-          auto* c = hm.component(i);
-          if (c) publishers::publish_component_health(bus, *c, now_ms);
+      // Service MQTT I/O
+      if (g_eth_connected) {
+        if (!g_mqtt.connected()) {
+          static uint32_t last_try = 0;
+          if (now_ms - last_try > 2000) {
+            last_try = now_ms;
+            Serial.println("[mqtt] connecting...");
+            if (mqtt_connect(now_ms)) {
+              Serial.println("[mqtt] connected");
+              publish_boot(now_ms);
+              g_bus.publish_online(now_ms);
+            } else {
+              Serial.print("[mqtt] failed rc=");
+              Serial.println(g_mqtt.state());
+            }
+          }
+        } else {
+          g_mqtt.loop();
         }
-        t_comphealth = now_ms;
       }
 
-      // publish PID state
-      if ((now_ms - t_pid) >= PID_STATE_PERIOD_MS) {
-      #if NUCRYO_USE_MODBUS_RTU
-        publishers::publish_pid_state(bus, "heat1", pid_heat1.state(), now_ms);
-        publishers::publish_pid_state(bus, "heat2", pid_heat2.state(), now_ms);
-        publishers::publish_pid_state(bus, "cool1", pid_cool1.state(), now_ms);
-      #endif
-        t_pid = now_ms;
-      }
+      // Poll / update components (example cadence)
+    #if NUCRYO_USE_MODBUS_RTU
+      pid_heat1.loop(now_ms, g_health);
+      pid_heat2.loop(now_ms, g_health);
+      pid_cool1.loop(now_ms, g_health);
+    #endif
+
+      // Compute and publish health / system state periodically
+      g_health.loop(now_ms);
+      g_bus.loop(now_ms, g_health);
+
+      delay(5);
     }
