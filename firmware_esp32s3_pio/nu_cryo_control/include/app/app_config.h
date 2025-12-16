@@ -9,7 +9,7 @@ static constexpr const char* NODE_ID    = "esp32a";
 // -------- MQTT broker (on your Pi) --------
 // If using Ethernet with static addressing, set broker_ip explicitly.
 // If DHCP, your broker hostname may work if DNS is configured.
-static constexpr const char* MQTT_BROKER_HOST = "192.168.1.10";
+static constexpr const char* MQTT_BROKER_HOST = "192.168.0.2";
 static constexpr uint16_t    MQTT_BROKER_PORT = 1883;
 
 static constexpr const char* MQTT_USERNAME = "";   // optional
@@ -37,9 +37,9 @@ static constexpr int W5500_MOSI_PIN = 13;
 
 // Optional: static IP for the ESP side. If all zeros, DHCP is used.
 struct Ip4 { uint8_t a,b,c,d; };
-static constexpr Ip4 ETH_STATIC_IP   = {0,0,0,0};
-static constexpr Ip4 ETH_STATIC_GW   = {0,0,0,0};
-static constexpr Ip4 ETH_STATIC_MASK = {0,0,0,0};
+static constexpr Ip4 ETH_STATIC_IP   = {192,168,0,50};
+static constexpr Ip4 ETH_STATIC_GW   = {192,168,0,2};
+static constexpr Ip4 ETH_STATIC_MASK = {255,255,255,0};   // typical /24
 
 // -------- Modbus RTU (PID controllers) --------
 static constexpr uint32_t MODBUS_BAUD = 115200;
