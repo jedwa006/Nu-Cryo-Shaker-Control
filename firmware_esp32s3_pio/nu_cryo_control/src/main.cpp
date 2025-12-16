@@ -3,7 +3,7 @@
 
     #include <SPI.h>
     #include <ETH.h>
-    #include <NetworkClient.h>
+    #include <WiFi.h>  // provides WiFiClient (lwIP sockets used by ETH as well)
 
     #include <PubSubClient.h>
     #include <ArduinoJson.h>
@@ -22,8 +22,8 @@
 
     // --- Networking state ---
     static bool g_eth_connected = false;
-    static NetworkClient g_net_client;
-    static PubSubClient g_mqtt(g_net_client);
+    static WiFiClient g_net_client;
+static PubSubClient g_mqtt(g_net_client);
 
     // --- Core objects ---
     static HealthManager g_health;
