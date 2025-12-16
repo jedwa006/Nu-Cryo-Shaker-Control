@@ -3,7 +3,7 @@
 
     #include <SPI.h>
     #include <ETH.h>
-    #include <Network.h>
+    #include <NetworkClient.h>
 
     #include <PubSubClient.h>
     #include <ArduinoJson.h>

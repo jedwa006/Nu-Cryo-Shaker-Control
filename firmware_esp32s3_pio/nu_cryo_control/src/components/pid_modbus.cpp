@@ -1,5 +1,5 @@
 \
-    #include "pid_modbus.h"
+    #include "components/pid_modbus.h"
     #include "app/app_config.h"
 
     PidModbusComponent::PidModbusComponent(const char* name, uint8_t slave_id, ModbusRTU& mb)

@@ -1,5 +1,5 @@
 \
-    #include "publishers.h"
+    #include "core/publishers.h"
 
     using namespace publishers;
 
