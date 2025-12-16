@@ -23,11 +23,11 @@
     // --- Networking state ---
     static bool g_eth_connected = false;
     static WiFiClient g_net_client;
-static PubSubClient g_mqtt(g_net_client);
+    static PubSubClient g_mqtt(g_net_client);
 
     // --- Core objects ---
     static HealthManager g_health;
-    static MqttBus g_bus(g_mqtt);
+    static MqttBus g_bus;
 
     // --- Components (example set) ---
     #if NUCRYO_USE_MODBUS_RTU
@@ -147,7 +147,7 @@ static PubSubClient g_mqtt(g_net_client);
       eth_begin();
 
       // Initialize MQTT routing (commands, etc.)
-      g_bus.begin();
+      g_bus.begin(g_mqtt, MACHINE_ID, NODE_ID);
     }
 
     void loop()
