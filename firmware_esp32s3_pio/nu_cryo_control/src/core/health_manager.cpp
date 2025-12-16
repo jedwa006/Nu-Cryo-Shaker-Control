@@ -1,6 +1,5 @@
 \
-    #include "core/health_manager.h"
-
+#include "core/health_manager.h"
     bool HealthManager::add(IHealthComponent* c) {
       if (!c) return false;
       if (n_ >= MAX_COMPONENTS) return false;

@@ -1,6 +1,5 @@
 \
-    #include "core/mqtt_bus.h"
-
+#include "core/mqtt_bus.h"
     MqttBus* MqttBus::self_ = nullptr;
 
     bool MqttBus::begin(PubSubClient& client, const char* machine_id, const char* node_id) {

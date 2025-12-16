@@ -1,6 +1,5 @@
 \
-    #include "core/publishers.h"
-
+#include "core/publishers.h"
     using namespace publishers;
 
     void publishers::publish_heartbeat(MqttBus& bus, uint32_t now_ms, uint32_t uptime_s) {

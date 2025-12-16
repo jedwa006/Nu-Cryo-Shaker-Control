@@ -1,6 +1,5 @@
 \
-    #include "components/adxl345.h"
-
+#include "components/adxl345.h"
     static constexpr uint8_t REG_DEVID = 0x00;
     static constexpr uint8_t ADXL345_DEVID = 0xE5;
 
