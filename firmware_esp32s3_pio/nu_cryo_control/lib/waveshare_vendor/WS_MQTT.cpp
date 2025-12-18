@@ -11,7 +11,7 @@ char sub[] = MQTT_Sub;      // MQTT subscribe to topics
 WiFiClient espClient;       //MQTT initializes the contents
 PubSubClient client(espClient);
 
-DynamicJsonDocument sendJson(400);
+JsonDocument sendJson;
 char msg[MSG_BUFFER_SIZE];
 bool WIFI_Connection_Old = 0;
 
@@ -135,6 +135,9 @@ void reconnect(void) {
 }
 // Send data in JSON format to MQTT server
 void sendJsonData(void) {
+  // Reserve enough capacity for the small status payloads we emit.
+  sendJson.clear();
+  sendJson.reserve(400);
   sendJson["ID"] = ID;
   String pubres;
   serializeJson(sendJson, pubres);
