@@ -15,7 +15,9 @@
 #define RX_CHARACTERISTIC_UUID  "beb5483e-36e1-4688-b7f5-ea07361b26a8"          // UUID of the characteristic Tx
 #define TX_CHARACTERISTIC_UUID  "beb5484a-36e1-4688-b7f5-ea07361b26a8"          // UUID of the characteristic Rx
 
-#define Bluetooth_Mode    2
+#ifndef Bluetooth_Mode
+#define Bluetooth_Mode    3
+#endif
 
 
 void Bluetooth_SendData(char * Data);   
