@@ -2,9 +2,9 @@
 
 #include <Arduino.h>
 
-#include "waveshare_vendor/I2C_Driver.h"
-#include "waveshare_vendor/WS_Relay.h"
-#include "waveshare_vendor/WS_TCA9554PWR.h"
+#include "../waveshare_vendor/I2C_Driver.h"
+#include "../waveshare_vendor/WS_Relay.h"
+#include "../waveshare_vendor/WS_TCA9554PWR.h"
 
 bool RelayHal::begin() {
   I2C_Init();
