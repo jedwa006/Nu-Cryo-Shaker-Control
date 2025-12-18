@@ -1,201 +1,26 @@
 #include <Arduino.h>
 
-#include <SPI.h>
-#include <ETH.h>
-#include <Network.h>         // Network.onEvent()
-#include <NetworkClient.h>   // NetworkClient
-
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
 #include "app/app_config.h"
+#include "components/eth_health.h"
+#include "core/fieldbus_service.h"
 #include "core/health_manager.h"
+#include "core/health_registry.h"
 #include "core/mqtt_bus.h"
-
-#if NUCRYO_USE_MODBUS_RTU
-  #include <HardwareSerial.h>
-  #include <ModbusRTU.h>
-  #include "components/pid_modbus.h"
-#endif
-
-// -------------------------------------------------------------------------------------------------
-// Networking state & MQTT plumbing
-// -------------------------------------------------------------------------------------------------
-static bool g_eth_connected = false;
-static bool g_eth_static = false;
-static NetworkClient g_net_client;
-static PubSubClient g_mqtt(g_net_client);
+#include "core/network_manager.h"
 
 // -------------------------------------------------------------------------------------------------
 // Core objects
 // -------------------------------------------------------------------------------------------------
-static HealthManager g_health;
+static NetworkManager g_network;
+static PubSubClient g_mqtt(g_network.client());
 static MqttBus g_bus;
-
-// -------------------------------------------------------------------------------------------------
-// Health component: Ethernet link
-// -------------------------------------------------------------------------------------------------
-class EthHealthComponent : public IHealthComponent {
-public:
-  const char* name() const override { return "eth"; }
-
-  void configure(bool expected, bool required) override {
-    rep_.expected = expected;
-    rep_.required = required;
-    rep_.status = expected ? HealthStatus::MISSING : HealthStatus::OK;
-    rep_.severity = expected ? Severity::WARN : Severity::INFO;
-    rep_.reason = expected ? "init" : "n/a";
-    rep_.since_ms = millis();
-    rep_.last_ok_ms = 0;
-  }
-
-  bool probe(uint32_t now_ms) override {
-    // For ETH, "probe" just reflects current link state.
-    return tick(now_ms);
-  }
-
-  bool tick(uint32_t now_ms) override {
-    if (!rep_.expected) {
-      rep_.status = HealthStatus::OK;
-      rep_.severity = Severity::INFO;
-      rep_.reason = "disabled";
-      rep_.since_ms = now_ms;
-      return true;
-    }
-
-    if (g_eth_connected) {
-      if (rep_.status != HealthStatus::OK) rep_.since_ms = now_ms;
-      rep_.status = HealthStatus::OK;
-      rep_.severity = Severity::INFO;
-      rep_.reason = "up";
-      rep_.last_ok_ms = now_ms;
-      return true;
-    }
-
-    // Link down (or no IP yet)
-    if (rep_.status == HealthStatus::OK) rep_.since_ms = now_ms;
-    rep_.status = HealthStatus::MISSING;
-    rep_.severity = rep_.required ? Severity::CRIT : Severity::WARN;
-    rep_.reason = "down";
-    return false;
-  }
-
-  uint32_t stale_timeout_ms() const override { return 0; }
-  HealthReport report() const override { return rep_; }
-
-private:
-  HealthReport rep_ {};
-};
-
-static EthHealthComponent eth_health;
-
-// -------------------------------------------------------------------------------------------------
-// Optional: Modbus RTU PID components
-// -------------------------------------------------------------------------------------------------
-#if NUCRYO_USE_MODBUS_RTU
-
-static ModbusRTU g_mb;
-
-static PidModbusComponent pid_heat1("pid_heat1", MODBUS_CONFIG.pid_heat1_id, g_mb);
-static PidModbusComponent pid_heat2("pid_heat2", MODBUS_CONFIG.pid_heat2_id, g_mb);
-static PidModbusComponent pid_cool1("pid_cool1", MODBUS_CONFIG.pid_cool1_id, g_mb);
-
-#endif
-
-// -------------------------------------------------------------------------------------------------
-// Ethernet event handling (Arduino-ESP32 v3.x style)
-// -------------------------------------------------------------------------------------------------
-static void on_eth_event(arduino_event_id_t event, arduino_event_info_t /*info*/)
-{
-  // NOTE: called from another FreeRTOS task.
-  switch (event) {
-    case ARDUINO_EVENT_ETH_START:
-      Serial.println("[eth] start");
-      ETH.setHostname("nu-cryo-esp32s3");
-      break;
-
-    case ARDUINO_EVENT_ETH_CONNECTED:
-      Serial.println("[eth] link up");
-      break;
-
-    case ARDUINO_EVENT_ETH_GOT_IP:
-      Serial.print("[eth] got ip: ");
-      Serial.println(ETH.localIP());
-      g_eth_connected = true;
-      break;
-
-#ifdef ARDUINO_EVENT_ETH_LOST_IP
-    case ARDUINO_EVENT_ETH_LOST_IP:
-      Serial.println("[eth] lost ip");
-      g_eth_connected = false;
-      break;
-#endif
-
-    case ARDUINO_EVENT_ETH_DISCONNECTED:
-      Serial.println("[eth] link down");
-      g_eth_connected = false;
-      break;
-
-    case ARDUINO_EVENT_ETH_STOP:
-      Serial.println("[eth] stop");
-      g_eth_connected = false;
-      break;
-
-    default:
-      break;
-  }
-}
-
-static bool eth_begin()
-{
-#if NUCRYO_USE_ETH_W5500
-  Network.onEvent(on_eth_event);
-
-  // Waveshare W5500 is on dedicated SPI pins.
-  SPI.begin(BOARD_PINS.w5500_sck, BOARD_PINS.w5500_miso, BOARD_PINS.w5500_mosi);
-
-  // Extra hard reset pulse (helps with "w5500_reset(): reset timeout" cases)
-#if (BOARD_PINS.w5500_rst >= 0)
-  pinMode(BOARD_PINS.w5500_rst, OUTPUT);
-  digitalWrite(BOARD_PINS.w5500_rst, LOW);
-  delay(50);
-  digitalWrite(BOARD_PINS.w5500_rst, HIGH);
-  delay(150);
-#endif
-
-  // phy_addr is typically 1 in Arduino-ESP32 W5500 examples.
-  bool ok = ETH.begin(ETH_PHY_W5500, /*phy_addr*/ 1,
-                      BOARD_PINS.w5500_cs, BOARD_PINS.w5500_int, BOARD_PINS.w5500_rst,
-                      SPI);
-
-  if (!ok) {
-    Serial.println("[eth] ETH.begin() failed (W5500 init) â€” continuing without network");
-    g_eth_connected = false;
-    return false;
-  }
-
-  const bool static_requested =
-    (NET_DEFAULTS.static_ip.a | NET_DEFAULTS.static_ip.b | NET_DEFAULTS.static_ip.c | NET_DEFAULTS.static_ip.d) != 0;
-  if (static_requested) {
-    IPAddress local(NET_DEFAULTS.static_ip.a, NET_DEFAULTS.static_ip.b, NET_DEFAULTS.static_ip.c, NET_DEFAULTS.static_ip.d);
-    IPAddress gateway(NET_DEFAULTS.static_gw.a, NET_DEFAULTS.static_gw.b, NET_DEFAULTS.static_gw.c, NET_DEFAULTS.static_gw.d);
-    IPAddress subnet(NET_DEFAULTS.static_mask.a, NET_DEFAULTS.static_mask.b, NET_DEFAULTS.static_mask.c, NET_DEFAULTS.static_mask.d);
-    const bool configured = ETH.config(local, gateway, subnet, gateway);
-    g_eth_static = configured;
-
-    if (configured) {
-      Serial.print("[eth] static addressing ");
-      Serial.println(local);
-    } else {
-      Serial.println("[eth] ETH.config() failed (static) â€” using DHCP");
-    }
-  } else {
-    Serial.println("[eth] DHCP (no static IP configured)");
-    g_eth_static = false;
-  }
-#endif
-  return true;
-}
+static HealthManager g_health;
+static HealthRegistry g_health_registry(g_health);
+static EthHealthComponent g_eth_health(g_network);
+static FieldbusService g_fieldbus;
 
 // -------------------------------------------------------------------------------------------------
 // MQTT connect + boot/LWT publishing
@@ -249,11 +74,11 @@ static void publish_boot(uint32_t now_ms)
   doc["ts_ms"] = now_ms;
   doc["node"] = NODE_ID;
   doc["fw"] = "nu_cryo_control_pio";
-  doc["eth"] = g_eth_connected;
-  doc["eth_static"] = g_eth_static;
+  doc["eth"] = g_network.connected();
+  doc["eth_static"] = g_network.using_static_ip();
 
-  if (g_eth_connected) {
-    doc["ip"] = ETH.localIP().toString();
+  if (g_network.connected()) {
+    doc["ip"] = g_network.local_ip().toString();
   }
 
   g_bus.publish_json(NET_TOPICS.boot, doc, /*retained*/ true);
@@ -272,26 +97,13 @@ void setup()
   g_bus.begin(g_mqtt, MACHINE_ID, NODE_ID);
 
   // Health policy: register and configure components
-  eth_health.configure(/*expected*/ true, /*required*/ true);
-  g_health.add(&eth_health);
+  g_health_registry.register_component(g_eth_health, /*expected*/ true, /*required*/ true);
 
-#if NUCRYO_USE_MODBUS_RTU
-  // Bring up RS485 UART and Modbus stack.
-  Serial1.begin(MODBUS_CONFIG.baud, SERIAL_8N1, MODBUS_CONFIG.rx_pin, MODBUS_CONFIG.tx_pin);
-  g_mb.begin(&Serial1);
-  g_mb.master();
-
-  pid_heat1.configure(true, true);
-  pid_heat2.configure(true, true);
-  pid_cool1.configure(true, true);
-
-  g_health.add(&pid_heat1);
-  g_health.add(&pid_heat2);
-  g_health.add(&pid_cool1);
-#endif
+  g_fieldbus.begin();
+  g_fieldbus.register_components(g_health_registry);
 
   // Bring up Ethernet (W5500)
-  eth_begin();
+  g_network.begin();
 }
 
 void loop()
@@ -302,24 +114,13 @@ void loop()
   static uint32_t last_eth_tick = 0;
   if (now_ms - last_eth_tick >= 250) {
     last_eth_tick = now_ms;
-    eth_health.tick(now_ms);
+    g_eth_health.tick(now_ms);
   }
 
-#if NUCRYO_USE_MODBUS_RTU
-  static uint32_t last_pid_tick = 0;
-  if (now_ms - last_pid_tick >= 200) {
-    last_pid_tick = now_ms;
-    // Service modbus stack + refresh data
-    g_mb.task();
-
-    pid_heat1.tick(now_ms);
-    pid_heat2.tick(now_ms);
-    pid_cool1.tick(now_ms);
-  }
-#endif
+  g_fieldbus.tick(now_ms);
 
   // MQTT state machine (only attempt connect when ETH is up)
-  if (g_eth_connected) {
+  if (g_network.connected()) {
     if (!g_mqtt.connected()) {
       static uint32_t last_try = 0;
       if (now_ms - last_try > 2000) {
