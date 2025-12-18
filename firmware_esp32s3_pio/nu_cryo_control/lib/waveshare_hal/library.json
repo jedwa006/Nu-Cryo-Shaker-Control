@@ -1,0 +1,12 @@
+{
+  "name": "waveshare_hal",
+  "version": "0.1.0",
+  "description": "Thin hardware-abstraction layer for Waveshare ESP32-S3 ETH-8DI-8RO board",
+  "dependencies": [
+    { "name": "waveshare_vendor" }
+  ],
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include"
+  }
+}
