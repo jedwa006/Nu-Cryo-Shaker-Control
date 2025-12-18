@@ -30,7 +30,8 @@
 
     void publish_heartbeat(MqttBus& bus, uint32_t now_ms, uint32_t uptime_s);
     void publish_component_health(MqttBus& bus, const IHealthComponent& c, uint32_t now_ms);
-    void publish_system_health(MqttBus& bus, const SystemHealth& sh, uint32_t now_ms);
+    // Optional subtopic lets callers honor board-configured health paths.
+    void publish_system_health(MqttBus& bus, const SystemHealth& sh, uint32_t now_ms, const char* subtopic = "sys/health");
 
     void publish_pid_state(MqttBus& bus, const char* pid_name, const PidState& st, uint32_t now_ms);
 
