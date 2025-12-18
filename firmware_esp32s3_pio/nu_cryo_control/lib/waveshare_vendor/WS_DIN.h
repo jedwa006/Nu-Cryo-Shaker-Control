@@ -16,3 +16,4 @@
 #define DIN_Inverse_Enable        1       // Input is reversed from control
 
 void DIN_Init(void);
+uint8_t DIN_Read_CHxs();

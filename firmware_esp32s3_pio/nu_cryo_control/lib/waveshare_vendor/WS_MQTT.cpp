@@ -11,7 +11,7 @@ char sub[] = MQTT_Sub;      // MQTT subscribe to topics
 WiFiClient espClient;       //MQTT initializes the contents
 PubSubClient client(espClient);
 
-StaticJsonDocument<400> sendJson;
+DynamicJsonDocument sendJson(400);
 char msg[MSG_BUFFER_SIZE];
 bool WIFI_Connection_Old = 0;
 
@@ -79,21 +79,21 @@ void callback(char* topic, byte* payload, unsigned int length) {
       int Value = ValueStr.toInt();
       if(CH_Flag < 9){
         if(Value == 1 && Relay_Flag[CH_Flag - 1] == 0){
-          uint8_t Data[1]={CH_Flag+48};
+          uint8_t Data[1]={static_cast<uint8_t>(CH_Flag + '0')};
           Relay_Analysis(Data,MQTT_Mode);
         }
         else if(Value == 0 && Relay_Flag[CH_Flag - 1] == 1){
-          uint8_t Data[1]={CH_Flag+48};
+          uint8_t Data[1]={static_cast<uint8_t>(CH_Flag + '0')};
           Relay_Analysis(Data,MQTT_Mode);
         }
       }
       else if(CH_Flag == 9){
         if(Value == 1 && ((Relay_Flag[0] & Relay_Flag[1] & Relay_Flag[2] & Relay_Flag[3] & Relay_Flag[4] & Relay_Flag[5] & Relay_Flag[6] & Relay_Flag[7]) == 0)){
-          uint8_t Data[1]={9+48};
+          uint8_t Data[1]={static_cast<uint8_t>('9')};
           Relay_Analysis(Data,MQTT_Mode);
         }
         else if(Value == 0 && ((Relay_Flag[0] | Relay_Flag[1] | Relay_Flag[2] | Relay_Flag[3] | Relay_Flag[4] | Relay_Flag[5] | Relay_Flag[6] | Relay_Flag[7] )== 1)){
-          uint8_t Data[1]={0+48};
+          uint8_t Data[1]={static_cast<uint8_t>('0')};
           Relay_Analysis(Data,MQTT_Mode);
         }
       }
@@ -179,4 +179,3 @@ void MQTT_Init(void)
     0                   
   );
 }
-

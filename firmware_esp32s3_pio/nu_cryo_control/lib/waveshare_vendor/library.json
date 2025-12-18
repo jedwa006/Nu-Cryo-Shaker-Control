@@ -1,0 +1,9 @@
+{
+  "name": "waveshare_vendor",
+  "version": "0.1.0",
+  "description": "Vendor-provided Waveshare board helpers (GPIO, DIN, relay, RS485, etc.)",
+  "build": {
+    "srcDir": ".",
+    "includeDir": "."
+  }
+}
