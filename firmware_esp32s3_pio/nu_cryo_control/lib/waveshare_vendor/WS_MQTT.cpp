@@ -137,7 +137,6 @@ void reconnect(void) {
 void sendJsonData(void) {
   // Reserve enough capacity for the small status payloads we emit.
   sendJson.clear();
-  sendJson.reserve(400);
   sendJson["ID"] = ID;
   String pubres;
   serializeJson(sendJson, pubres);
