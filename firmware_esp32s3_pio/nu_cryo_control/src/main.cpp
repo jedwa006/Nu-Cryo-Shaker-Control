@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 
 #include "app/app_config.h"
+#include "core/io_service.h"
 #include "components/eth_health.h"
 #include "core/fieldbus_service.h"
 #include "core/health_manager.h"
@@ -22,6 +23,7 @@ static HealthManager g_health;
 static HealthRegistry g_health_registry(g_health);
 static EthHealthComponent g_eth_health(g_network);
 static FieldbusService g_fieldbus;
+static IoService g_io(g_bus, g_health);
 
 // -------------------------------------------------------------------------------------------------
 // MQTT connect + boot/LWT publishing
@@ -129,12 +131,17 @@ void setup()
 
   // Bus can be initialized before MQTT connects; it just stores root + callback shims.
   g_bus.begin(g_mqtt, MACHINE_ID, NODE_ID);
+  g_bus.set_handler([](const char* topic, const uint8_t* payload, size_t len) {
+    g_io.handle_message(topic, payload, len);
+  });
 
   // Health policy: register and configure components
   g_health_registry.register_component(g_eth_health, /*expected*/ true, /*required*/ true);
+  g_io.register_components(g_health_registry);
 
   g_fieldbus.begin();
   g_fieldbus.register_components(g_health_registry);
+  g_io.begin();
 
   // Bring up Ethernet (W5500)
   g_network.begin();
@@ -152,6 +159,7 @@ void loop()
   }
 
   g_fieldbus.tick(now_ms);
+  g_io.tick(now_ms);
 
   // MQTT state machine (only attempt connect when ETH is up)
   if (g_network.connected()) {
@@ -162,6 +170,7 @@ void loop()
         Serial.println("[mqtt] connecting...");
         if (mqtt_connect(now_ms)) {
           Serial.println("[mqtt] connected");
+          g_io.on_mqtt_connected();
           publish_boot(now_ms);
           publish_lwt_online(now_ms);
         } else {
@@ -172,11 +181,11 @@ void loop()
     }
   }
 
-  // Let the bus pump MQTT callbacks when connected
-  g_bus.loop();
-
   // Evaluate system health (stale logic + aggregation)
   g_health.evaluate(now_ms);
+
+  // Let the bus pump MQTT callbacks when connected
+  g_bus.loop();
 
   // Publish heartbeat + health when MQTT is up
   publish_reports(now_ms);

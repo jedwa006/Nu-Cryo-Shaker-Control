@@ -2,17 +2,15 @@
 
 This plan captures the next set of firmware tasks after the PlatformIO migration and baseline health/Modbus bring-up.
 
-## 1) Enable DIN (digital inputs) with isolation
+## 1) DIN (digital inputs) with isolation
 
-- Wrap the Waveshare DIN helpers (`lib/waveshare_vendor/WS_DIN.*`) inside `lib/waveshare_hal/` and expose a clean API for reading all eight channels plus edge/level detection. The vendor examples use GPIOs 4–11 with `INPUT_PULLUP`; preserve the isolation inversion rules (`DIN_Inverse_Enable`). 
-- Add a health component for DIN that reports presence and freshness (e.g., poll + stale timeout) and publishes `io/din/state` / `io/din/event` topics per the protocol scaffold.
-- Wire critical inputs (e-stop/door) into the future run/estop state machine so a tripped DIN can immediately force `run_allowed=false` and `outputs_allowed=false`.
+- ✅ Implemented: `waveshare_hal::DinHal` wraps `WS_DIN.*` with inversion preserved, `DinComponent` (required) drives health, and `io/din/state` + `io/din/event` publish the 8-bit mask (estop/lid/door on bits 0–2) at `IO_STATE_PERIOD_MS`.
+- Next: feed DIN interlocks into the run/estop state machine once it lands, and add any bit-to-signal mapping needed for auxiliary sensors.
 
-## 2) Enable RO (relay outputs) through the GPIO expander
+## 2) RO (relay outputs) through the GPIO expander
 
-- Integrate the TCA9554-based expander via a HAL wrapper (`lib/waveshare_vendor/WS_Relay.*` and `WS_TCA9554PWR.*`) so the application code can set relay bitmasks without vendor-specific headers. 
-- Implement an `IoService` that owns relay state, enforces `outputs_allowed`, and handles MQTT commands (e.g., `io/cmd/event`) with acknowledgements consistent with `docs/protocol.md`.
-- Add health reporting for the expander (probe + stale detection) and publish `io/dout/state` snapshots so HMI dashboards can render output status.
+- ✅ Implemented: `waveshare_hal::RelayHal` wraps the TCA9554 expander, `RelayComponent` tracks health/state, and `IoService` publishes `io/dout/state` while handling `io/cmd/event` with `io/dout/ack` responses. Commands are blocked when `outputs_allowed=false`.
+- Next: add default power-on output policies, per-channel safety overrides, and broaden ack payloads if the dashboard needs more context.
 
 ## 3) Finish run/estop control plane
 

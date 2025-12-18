@@ -42,5 +42,7 @@ Device responds on `.../<subsystem>/<name>/ack` with:
 ## IO / Safety
 
 - `.../safety/state` and `.../safety/event`
-- `.../io/din/state`, `.../io/din/event`, and `.../io/cmd/event`
-
+- `.../io/din/state` (mask @ `IO_STATE_PERIOD_MS`), `.../io/din/event` (rising/falling/prev_mask)
+- `.../io/cmd/event` (set relay mask or `channel` + `state`)
+- `.../io/dout/state` (relay mask + `outputs_allowed`) and `.../io/dout/ack` (cmd_id/ok/err)
+- DIN bits 0–2 map to estop OK / lid locked / door closed (inversion enabled). These are marked required and gate `outputs_allowed`.
