@@ -3,7 +3,7 @@
 using namespace publishers;
 
 void publishers::publish_heartbeat(MqttBus& bus, uint32_t now_ms, uint32_t uptime_s) {
-  JsonDocument doc(384);
+  DynamicJsonDocument doc(384);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;
@@ -14,7 +14,7 @@ void publishers::publish_heartbeat(MqttBus& bus, uint32_t now_ms, uint32_t uptim
 void publishers::publish_component_health(MqttBus& bus, const IHealthComponent& c, uint32_t now_ms) {
   const HealthReport r = c.report();
 
-  JsonDocument doc(384);
+  DynamicJsonDocument doc(384);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;
@@ -34,7 +34,7 @@ void publishers::publish_component_health(MqttBus& bus, const IHealthComponent& 
 }
 
 void publishers::publish_system_health(MqttBus& bus, const SystemHealth& sh, uint32_t now_ms, const char* subtopic) {
-  JsonDocument doc(384);
+  DynamicJsonDocument doc(384);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;
@@ -59,7 +59,7 @@ void publishers::publish_system_health(MqttBus& bus, const SystemHealth& sh, uin
 }
 
 void publishers::publish_pid_state(MqttBus& bus, const char* pid_name, const PidState& st, uint32_t now_ms) {
-  JsonDocument doc(384);
+  DynamicJsonDocument doc(384);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;
@@ -75,7 +75,7 @@ void publishers::publish_pid_state(MqttBus& bus, const char* pid_name, const Pid
 }
 
 void publishers::publish_din_state(MqttBus& bus, const DinSnapshot& din, uint32_t now_ms) {
-  JsonDocument doc(256);
+  DynamicJsonDocument doc(256);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;
@@ -84,7 +84,7 @@ void publishers::publish_din_state(MqttBus& bus, const DinSnapshot& din, uint32_
 }
 
 void publishers::publish_din_event(MqttBus& bus, const DinSnapshot& din, uint8_t prev_mask, uint32_t now_ms) {
-  JsonDocument doc(256);
+  DynamicJsonDocument doc(256);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;
@@ -96,7 +96,7 @@ void publishers::publish_din_event(MqttBus& bus, const DinSnapshot& din, uint8_t
 }
 
 void publishers::publish_dout_state(MqttBus& bus, uint8_t mask, bool outputs_allowed, uint32_t now_ms) {
-  JsonDocument doc(256);
+  DynamicJsonDocument doc(256);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;
@@ -106,7 +106,7 @@ void publishers::publish_dout_state(MqttBus& bus, uint8_t mask, bool outputs_all
 }
 
 void publishers::publish_dout_ack(MqttBus& bus, uint32_t now_ms, uint32_t cmd_id, bool ok, const char* err, uint8_t mask, bool outputs_allowed) {
-  JsonDocument doc(256);
+  DynamicJsonDocument doc(256);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["src"] = NODE_ID;

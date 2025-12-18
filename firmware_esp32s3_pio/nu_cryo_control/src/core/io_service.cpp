@@ -34,7 +34,7 @@ bool IoService::topic_matches(const char* topic) const {
 void IoService::handle_message(const char* topic, const uint8_t* payload, size_t len) {
   if (!topic_matches(topic)) return;
 
-  JsonDocument doc(256);
+  DynamicJsonDocument doc(256);
   const DeserializationError err = deserializeJson(doc, payload, len);
   if (err) return;
 
@@ -55,14 +55,14 @@ bool IoService::handle_command(const JsonDocument& doc, uint32_t now_ms, uint32_
     return false;
   }
 
-  if (doc.containsKey("mask")) {
+  if (doc["mask"].is<uint8_t>()) {
     const uint8_t mask = doc["mask"];
     const bool ok = apply_mask(mask, now_ms);
     publishers::publish_dout_ack(bus_, now_ms, cmd_id, ok, ok ? nullptr : "write_fail", relay_.mask(), outputs_ok);
     return ok;
   }
 
-  if (doc.containsKey("channel")) {
+  if (doc["channel"].is<uint8_t>()) {
     const uint8_t ch = doc["channel"];
     const bool state = doc["state"] | true;
     const bool ok = apply_channel(ch, state, now_ms);
