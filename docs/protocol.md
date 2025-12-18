@@ -19,14 +19,70 @@ Root prefix: `<MACHINE_ID>/<NODE_ID>/` (e.g., `cryo_mill_01/esp32a`). Topic name
 | MCU → HMI | `status/health` (QoS0)          | Aggregate health: `system_state` (`OK/DEGRADED/FAULT`), inhibit flags (`run_allowed`, `outputs_allowed`), warning/critical counts. |
 | MCU → HMI | `health/<component>/state`      | Per-component health snapshots (Ethernet, PID controllers, optional sensors). |
 | MCU → HMI | `pid/<name>/state` (QoS0)       | PV/SV/output% + validity at ~5 Hz for each configured PID (`pid_heat1`, `pid_heat2`, `pid_cool1`). |
+| MCU → HMI | `io/din/state` (QoS0)           | Digital input mask (8 bits, DIN inversion applied) at `IO_STATE_PERIOD_MS` (200 ms). |
+| MCU → HMI | `io/din/event` (QoS0)           | Emitted on DIN edge/change with `rising/falling` masks and `prev_mask`. |
+| HMI → MCU | `io/cmd/event` (QoS0/1)         | IO command input: set full relay mask (`mask`) or a single `channel` + `state`. Includes `cmd_id`. |
+| MCU → HMI | `io/dout/state` (QoS0)          | Relay output mask + `outputs_allowed` at `IO_STATE_PERIOD_MS` (200 ms). |
+| MCU → HMI | `io/dout/ack` (QoS0/1)          | Ack for `io/cmd/event` with `cmd_id/ok/err` + resulting mask/permissions. |
 
 Health aggregation rules (implemented in `HealthManager`):
 
 - Any **required** component in `MISSING/ERROR/STALE` ⇒ `system_state=FAULT`, `run_allowed=false`, `outputs_allowed=false`.
 - Optional component failure ⇒ `system_state=DEGRADED`, `run_allowed=true`, `outputs_allowed=true`.
 - `UNCONFIGURED` does not affect the aggregate state.
+- The DIN component is marked **required**; estop/lid/door faults drive `run_allowed=false` and `outputs_allowed=false`, which also gate output commands.
 
 The HMI should honor `run_allowed`/`outputs_allowed` when implementing run/estop logic and IO control.
+
+### IO topics and payloads
+
+- **DIN mapping (bit numbers, already inversion-adjusted):**
+  - Bit 0 – Estop OK
+  - Bit 1 – Lid locked
+  - Bit 2 – Door closed
+  - Bits 3–7 – spare digital inputs
+  - The firmware enables `DIN_Inverse_Enable`, so a closed/active input reads as `1` in the mask.
+
+- `io/din/state` (MCU → HMI, QoS0): published every `IO_STATE_PERIOD_MS` (200 ms)
+
+  ```json
+  { "v": 1, "ts_ms": 123456, "src": "esp32a", "mask": 7 }
+  ```
+
+- `io/din/event` (MCU → HMI, QoS0): on any change/edge
+
+  ```json
+  {
+    "v": 1, "ts_ms": 123456, "src": "esp32a",
+    "mask": 5, "prev_mask": 7,
+    "rising": 0, "falling": 2
+  }
+  ```
+
+- `io/cmd/event` (HMI → MCU, QoS0/1): set outputs by full mask or per-channel
+
+  ```json
+  { "cmd_id": 42, "mask": 129 }              // set all 8 relays at once
+  { "cmd_id": 43, "channel": 3, "state": false }  // turn CH3 off (channels are 1–8)
+  ```
+
+  Commands are rejected with `outputs_inhibited` if `outputs_allowed=false` (health fault or DIN interlock).
+
+- `io/dout/state` (MCU → HMI, QoS0): relay snapshot + permissions at 5 Hz
+
+  ```json
+  { "v": 1, "ts_ms": 123456, "src": "esp32a", "mask": 17, "outputs_allowed": true }
+  ```
+
+- `io/dout/ack` (MCU → HMI, QoS0/1): acknowledgement for `io/cmd/event`
+
+  ```json
+  {
+    "v": 1, "ts_ms": 123460, "src": "esp32a",
+    "cmd_id": 42, "ok": true,
+    "mask": 129, "outputs_allowed": true
+  }
+  ```
 
 ---
 
