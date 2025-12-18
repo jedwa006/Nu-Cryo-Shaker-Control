@@ -19,41 +19,6 @@
 #endif
 
 // -------------------------------------------------------------------------------------------------
-// Pin fallbacks (Waveshare ESP32-S3-ETH-8DI-8RO / W5500)
-// These match Waveshare's vendor code + wiki.
-// If you already define these in app_config.h, those values win.
-// -------------------------------------------------------------------------------------------------
-#ifndef W5500_INT_PIN
-  #define W5500_INT_PIN 12
-#endif
-#ifndef W5500_MOSI_PIN
-  #define W5500_MOSI_PIN 13
-#endif
-#ifndef W5500_MISO_PIN
-  #define W5500_MISO_PIN 14
-#endif
-#ifndef W5500_SCK_PIN
-  #define W5500_SCK_PIN 15
-#endif
-#ifndef W5500_CS_PIN
-  #define W5500_CS_PIN 16
-#endif
-#ifndef W5500_RST_PIN
-  #define W5500_RST_PIN 39
-#endif
-
-// MQTT subtopics (under MqttBus root())
-#ifndef MQTT_SUBTOPIC_LWT
-  #define MQTT_SUBTOPIC_LWT    "status/lwt"
-#endif
-#ifndef MQTT_SUBTOPIC_BOOT
-  #define MQTT_SUBTOPIC_BOOT   "status/boot"
-#endif
-#ifndef MQTT_SUBTOPIC_HEALTH
-  #define MQTT_SUBTOPIC_HEALTH "status/health"
-#endif
-
-// -------------------------------------------------------------------------------------------------
 // Networking state & MQTT plumbing
 // -------------------------------------------------------------------------------------------------
 static bool g_eth_connected = false;
@@ -129,32 +94,11 @@ static EthHealthComponent eth_health;
 // -------------------------------------------------------------------------------------------------
 #if NUCRYO_USE_MODBUS_RTU
 
-// Waveshare vendor header uses UART1 pins: TX=17, RX=18 (RS485/CAN block)
-#ifndef RS485_TX_PIN
-  #define RS485_TX_PIN 17
-#endif
-#ifndef RS485_RX_PIN
-  #define RS485_RX_PIN 18
-#endif
-#ifndef RS485_BAUD
-  #define RS485_BAUD 9600
-#endif
-
-#ifndef PID_HEAT1_SLAVE_ID
-  #define PID_HEAT1_SLAVE_ID 1
-#endif
-#ifndef PID_HEAT2_SLAVE_ID
-  #define PID_HEAT2_SLAVE_ID 2
-#endif
-#ifndef PID_COOL1_SLAVE_ID
-  #define PID_COOL1_SLAVE_ID 3
-#endif
-
 static ModbusRTU g_mb;
 
-static PidModbusComponent pid_heat1("pid_heat1", PID_HEAT1_SLAVE_ID, g_mb);
-static PidModbusComponent pid_heat2("pid_heat2", PID_HEAT2_SLAVE_ID, g_mb);
-static PidModbusComponent pid_cool1("pid_cool1", PID_COOL1_SLAVE_ID, g_mb);
+static PidModbusComponent pid_heat1("pid_heat1", MODBUS_CONFIG.pid_heat1_id, g_mb);
+static PidModbusComponent pid_heat2("pid_heat2", MODBUS_CONFIG.pid_heat2_id, g_mb);
+static PidModbusComponent pid_cool1("pid_cool1", MODBUS_CONFIG.pid_cool1_id, g_mb);
 
 #endif
 
@@ -208,20 +152,20 @@ static bool eth_begin()
   Network.onEvent(on_eth_event);
 
   // Waveshare W5500 is on dedicated SPI pins.
-  SPI.begin(W5500_SCK_PIN, W5500_MISO_PIN, W5500_MOSI_PIN);
+  SPI.begin(BOARD_PINS.w5500_sck, BOARD_PINS.w5500_miso, BOARD_PINS.w5500_mosi);
 
   // Extra hard reset pulse (helps with "w5500_reset(): reset timeout" cases)
-#if (W5500_RST_PIN >= 0)
-  pinMode(W5500_RST_PIN, OUTPUT);
-  digitalWrite(W5500_RST_PIN, LOW);
+#if (BOARD_PINS.w5500_rst >= 0)
+  pinMode(BOARD_PINS.w5500_rst, OUTPUT);
+  digitalWrite(BOARD_PINS.w5500_rst, LOW);
   delay(50);
-  digitalWrite(W5500_RST_PIN, HIGH);
+  digitalWrite(BOARD_PINS.w5500_rst, HIGH);
   delay(150);
 #endif
 
   // phy_addr is typically 1 in Arduino-ESP32 W5500 examples.
   bool ok = ETH.begin(ETH_PHY_W5500, /*phy_addr*/ 1,
-                      W5500_CS_PIN, W5500_INT_PIN, W5500_RST_PIN,
+                      BOARD_PINS.w5500_cs, BOARD_PINS.w5500_int, BOARD_PINS.w5500_rst,
                       SPI);
 
   if (!ok) {
@@ -230,11 +174,12 @@ static bool eth_begin()
     return false;
   }
 
-  const bool static_requested = (ETH_STATIC_IP.a | ETH_STATIC_IP.b | ETH_STATIC_IP.c | ETH_STATIC_IP.d) != 0;
+  const bool static_requested =
+    (NET_DEFAULTS.static_ip.a | NET_DEFAULTS.static_ip.b | NET_DEFAULTS.static_ip.c | NET_DEFAULTS.static_ip.d) != 0;
   if (static_requested) {
-    IPAddress local(ETH_STATIC_IP.a, ETH_STATIC_IP.b, ETH_STATIC_IP.c, ETH_STATIC_IP.d);
-    IPAddress gateway(ETH_STATIC_GW.a, ETH_STATIC_GW.b, ETH_STATIC_GW.c, ETH_STATIC_GW.d);
-    IPAddress subnet(ETH_STATIC_MASK.a, ETH_STATIC_MASK.b, ETH_STATIC_MASK.c, ETH_STATIC_MASK.d);
+    IPAddress local(NET_DEFAULTS.static_ip.a, NET_DEFAULTS.static_ip.b, NET_DEFAULTS.static_ip.c, NET_DEFAULTS.static_ip.d);
+    IPAddress gateway(NET_DEFAULTS.static_gw.a, NET_DEFAULTS.static_gw.b, NET_DEFAULTS.static_gw.c, NET_DEFAULTS.static_gw.d);
+    IPAddress subnet(NET_DEFAULTS.static_mask.a, NET_DEFAULTS.static_mask.b, NET_DEFAULTS.static_mask.c, NET_DEFAULTS.static_mask.d);
     const bool configured = ETH.config(local, gateway, subnet, gateway);
     g_eth_static = configured;
 
@@ -265,7 +210,7 @@ static String mqtt_full_topic(const char* subtopic)
 
 static bool mqtt_connect(uint32_t now_ms)
 {
-  g_mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
+  g_mqtt.setServer(NET_DEFAULTS.mqtt_broker_host, NET_DEFAULTS.mqtt_broker_port);
 
 #if defined(MQTT_MAX_PACKET_SIZE)
   g_mqtt.setBufferSize(MQTT_MAX_PACKET_SIZE);
@@ -282,7 +227,7 @@ static bool mqtt_connect(uint32_t now_ms)
   if (n >= sizeof(lwt_buf)) n = sizeof(lwt_buf) - 1;
   lwt_buf[n] = ' ';
 
-  const String willTopic = mqtt_full_topic(MQTT_SUBTOPIC_LWT);
+  const String willTopic = mqtt_full_topic(NET_TOPICS.lwt);
   return g_mqtt.connect(NODE_ID, willTopic.c_str(),
                         /*willQos*/ 1, /*willRetain*/ true,
                         /*willMessage*/ lwt_buf);
@@ -294,7 +239,7 @@ static void publish_lwt_online(uint32_t now_ms)
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
   doc["state"] = "online";
-  g_bus.publish_json(MQTT_SUBTOPIC_LWT, doc, /*retained*/ true, /*qos*/ 1);
+  g_bus.publish_json(NET_TOPICS.lwt, doc, /*retained*/ true, /*qos*/ 1);
 }
 
 static void publish_boot(uint32_t now_ms)
@@ -311,7 +256,7 @@ static void publish_boot(uint32_t now_ms)
     doc["ip"] = ETH.localIP().toString();
   }
 
-  g_bus.publish_json(MQTT_SUBTOPIC_BOOT, doc, /*retained*/ true);
+  g_bus.publish_json(NET_TOPICS.boot, doc, /*retained*/ true);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -332,7 +277,7 @@ void setup()
 
 #if NUCRYO_USE_MODBUS_RTU
   // Bring up RS485 UART and Modbus stack.
-  Serial1.begin(RS485_BAUD, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
+  Serial1.begin(MODBUS_CONFIG.baud, SERIAL_8N1, MODBUS_CONFIG.rx_pin, MODBUS_CONFIG.tx_pin);
   g_mb.begin(&Serial1);
   g_mb.master();
 
@@ -414,7 +359,7 @@ void loop()
     doc["warn"] = sh.warn_count;
     doc["crit"] = sh.crit_count;
 
-    g_bus.publish_json(MQTT_SUBTOPIC_HEALTH, doc, /*retained*/ false);
+    g_bus.publish_json(NET_TOPICS.health, doc, /*retained*/ false);
   }
 
   delay(5);
