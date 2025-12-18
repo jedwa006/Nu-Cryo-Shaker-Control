@@ -28,9 +28,11 @@ void GPIO_Init() {
   );
 }
 
-/*************************************************************  RGB  *************************************************************/
+/***  RGB  ***/
 void RGB_Light(uint8_t red_val, uint8_t green_val, uint8_t blue_val) {
-  neopixelWrite(GPIO_PIN_RGB, green_val, red_val, blue_val);  // RGB color adjustment
+  // esp32-hal-rgb-led marks neopixelWrite as deprecated; rgbLedWrite preserves
+  // behavior (GRB ordering for the Waveshare module) without the warning.
+  rgbLedWrite(GPIO_PIN_RGB, green_val, red_val, blue_val);
 }
 RGB_Indicate RGB_indicate[RGB_Indicate_Number];
 static uint8_t RGB_indicate_Num = 0;
