@@ -1,35 +1,56 @@
-# Cryo Mill Control – MQTT Protocol (v0)
+# Cryo mill MQTT protocol
 
-This document defines the MQTT topics, message formats, and basic state
-machine used by the cryogenic ball mill control system.
+This document tracks the MQTT topics and state machine used by the cryo shaker control stack. It covers two layers:
 
-The protocol is designed to keep:
-
-- **MCU (ESP32-S3)** as the *single source of truth* for process state,
-  interlocks, and device status.
-- **Pi / Node-RED / Dashboard** as a *thin client* that:
-  - sends high-level commands, and
-  - displays whatever the MCU reports.
-
-All other tools (remote monitor, logger, etc.) should speak only this protocol.
+- **Current PlatformIO baseline (health + PID telemetry):** Implemented today in `firmware_esp32s3_pio/nu_cryo_control`, rooted at `<MACHINE_ID>/<NODE_ID>/` with heartbeat/health/PID topics.
+- **Run/HMI control draft (v0):** The legacy `mill/*` topic map below describes the intended HMI command set. It will be aligned with the new root once the run/estop state machine lands.
 
 ---
 
-## 1. Roles and Transport
+## Current PlatformIO baseline topics
 
-### 1.1 Roles
+Root prefix: `<MACHINE_ID>/<NODE_ID>/` (e.g., `cryo_mill_01/esp32a`). Topic names come from `include/config/board_waveshare.h`.
+
+| Direction | Topic                           | Notes |
+|-----------|---------------------------------|-------|
+| MCU → HMI | `status/lwt` (retained, QoS1)   | Last Will: `state: offline`; publishes `state: online` on connect. |
+| MCU → HMI | `status/boot` (retained)        | Boot metadata: schema version, timestamp, node id, firmware name, Ethernet status/IP. |
+| MCU → HMI | `sys/heartbeat` (QoS0)          | 1 Hz heartbeat with uptime and timestamps. |
+| MCU → HMI | `status/health` (QoS0)          | Aggregate health: `system_state` (`OK/DEGRADED/FAULT`), inhibit flags (`run_allowed`, `outputs_allowed`), warning/critical counts. |
+| MCU → HMI | `health/<component>/state`      | Per-component health snapshots (Ethernet, PID controllers, optional sensors). |
+| MCU → HMI | `pid/<name>/state` (QoS0)       | PV/SV/output% + validity at ~5 Hz for each configured PID (`pid_heat1`, `pid_heat2`, `pid_cool1`). |
+
+Health aggregation rules (implemented in `HealthManager`):
+
+- Any **required** component in `MISSING/ERROR/STALE` ⇒ `system_state=FAULT`, `run_allowed=false`, `outputs_allowed=false`.
+- Optional component failure ⇒ `system_state=DEGRADED`, `run_allowed=true`, `outputs_allowed=true`.
+- `UNCONFIGURED` does not affect the aggregate state.
+
+The HMI should honor `run_allowed`/`outputs_allowed` when implementing run/estop logic and IO control.
+
+---
+
+## Legacy HMI command set (v0 draft)
+
+The original dashboard prototype used the `mill/*` topic map below. When the run/estop control plane is implemented on the PlatformIO firmware, migrate these semantics to the `<MACHINE_ID>/<NODE_ID>/` root.
+
+---
+
+### 1. Roles and Transport
+
+#### 1.1 Roles
 
 - **Broker**: Mosquitto running on the Raspberry Pi (port `1883`).
 - **MCU**: ESP32-S3-ETH-8DI-8RO board.
 - **HMI**: Node-RED + FlowFuse Dashboard running on the Pi.
 
-### 1.2 Connections
+#### 1.2 Connections
 
 - **Node-RED → Broker**: always connects to `localhost:1883`.
 - **MCU → Broker**: connects to the Pi’s Ethernet IP on the private link
   (e.g. `192.168.50.2:1883`).
 
-### 1.3 MQTT Settings
+#### 1.3 MQTT Settings
 
 - Protocol: **MQTT v3.1.1**
 - QoS: `0` (at-most-once) for all messages (v0).
@@ -37,7 +58,7 @@ All other tools (remote monitor, logger, etc.) should speak only this protocol.
 
 ---
 
-## 2. Topic Overview
+### 2. Topic Overview
 
 All topics are prefixed with `mill/`.
 
@@ -55,9 +76,9 @@ Listeners can wildcard-subscribe to:
 
 ---
 
-## 3. Control Commands (`mill/cmd/control`)
+### 3. Control Commands (`mill/cmd/control`)
 
-### 3.1 Payload Format
+#### 3.1 Payload Format
 
 **Topic:** `mill/cmd/control`  
 **Direction:** HMI → MCU
@@ -87,7 +108,7 @@ Listeners can wildcard-subscribe to:
 - `ts` (number, optional) – Unix timestamp (seconds since epoch) from the sender.
   - MCU may ignore this field and use its own clock.
 
-### 3.2 MCU Behaviour (high-level, v0)
+#### 3.2 MCU Behaviour (high-level, v0)
 
 - MCU subscribes to `mill/cmd/control`.
 - On valid `cmd`, updates internal state machine and physical outputs.
@@ -95,7 +116,7 @@ Listeners can wildcard-subscribe to:
 
 ---
 
-## 4. Configuration Commands (`mill/cmd/config`)
+### 4. Configuration Commands (`mill/cmd/config`)
 
 (Used for setting program parameters from the HMI.)
 
@@ -123,14 +144,14 @@ Any field may be omitted; the MCU should only update parameters that are present
 
 ---
 
-## 5. Primary Status (`mill/status/state`)
+### 5. Primary Status (`mill/status/state`)
 
 This is the **authoritative snapshot** of the mill’s state, published by the MCU at a regular interval (e.g. 5–10 Hz).
 
 **Topic:** `mill/status/state`  
 **Direction:** MCU → HMI
 
-### 5.1 Example
+#### 5.1 Example
 
 ```json
 {
@@ -163,9 +184,9 @@ This is the **authoritative snapshot** of the mill’s state, published by the M
 }
 ```
 
-### 5.2 Fields
+#### 5.2 Fields
 
-#### 5.2.1 Top-level
+##### 5.2.1 Top-level
 
 - `ts` (number) – MCU timestamp (Unix seconds).
 
@@ -204,7 +225,7 @@ This is the **authoritative snapshot** of the mill’s state, published by the M
 
 - `heartbeat` (number) – monotonically increasing counter for connectivity diagnostics.
 
-#### 5.2.2 Interlocks
+##### 5.2.2 Interlocks
 
 ```json
 "interlocks": {
@@ -220,7 +241,7 @@ This is the **authoritative snapshot** of the mill’s state, published by the M
 
 Additional interlocks (lid temperature, shaker overtemp, etc.) can be added later as extra fields.
 
-#### 5.2.3 LN₂ / temperature PID summary
+##### 5.2.3 LN₂ / temperature PID summary
 
 ```json
 "pid": {
@@ -239,7 +260,7 @@ In future, this may expand to an object per PID device, e.g. `pid_ln2`, `pid_bas
 
 ---
 
-## 6. Diagnostics (`mill/status/diag`) – optional, v0
+### 6. Diagnostics (`mill/status/diag`) – optional, v0
 
 This topic is optional and for verbose info that doesn’t need to drive the HMI directly (counters, error strings, device online state, etc.).
 
@@ -269,7 +290,7 @@ HMI may display some of this in an “Advanced / Diagnostics” view; most clien
 
 ---
 
-## 7. Versioning and Extensibility
+### 7. Versioning and Extensibility
 
 - This document defines **protocol v0**.
 - Future changes should:
