@@ -10,6 +10,7 @@
 #include "core/health_registry.h"
 #include "core/mqtt_bus.h"
 #include "core/network_manager.h"
+#include "core/publishers.h"
 
 // -------------------------------------------------------------------------------------------------
 // Core objects
@@ -85,6 +86,39 @@ static void publish_boot(uint32_t now_ms)
 }
 
 // -------------------------------------------------------------------------------------------------
+// Periodic MQTT publishers
+// -------------------------------------------------------------------------------------------------
+static void publish_reports(uint32_t now_ms)
+{
+  if (!g_mqtt.connected()) return;
+
+  static uint32_t last_heartbeat_pub = 0;
+  if (now_ms - last_heartbeat_pub >= HEARTBEAT_PERIOD_MS) {
+    last_heartbeat_pub = now_ms;
+    const uint32_t uptime_s = now_ms / 1000;
+    publishers::publish_heartbeat(g_bus, now_ms, uptime_s);
+  }
+
+  static uint32_t last_system_health_pub = 0;
+  if (now_ms - last_system_health_pub >= SYS_HEALTH_PERIOD_MS) {
+    last_system_health_pub = now_ms;
+    const SystemHealth& sh = g_health.system_health();
+    publishers::publish_system_health(g_bus, sh, now_ms, NET_TOPICS.health);
+  }
+
+  static uint32_t last_component_health_pub = 0;
+  if (now_ms - last_component_health_pub >= COMPONENT_HEALTH_PERIOD_MS) {
+    last_component_health_pub = now_ms;
+    for (size_t i = 0; i < g_health.count(); ++i) {
+      IHealthComponent* c = g_health.component(i);
+      if (c) {
+        publishers::publish_component_health(g_bus, *c, now_ms);
+      }
+    }
+  }
+}
+
+// -------------------------------------------------------------------------------------------------
 // Setup / Loop
 // -------------------------------------------------------------------------------------------------
 void setup()
@@ -144,24 +178,8 @@ void loop()
   // Evaluate system health (stale logic + aggregation)
   g_health.evaluate(now_ms);
 
-  // Publish health summary (1 Hz) when MQTT is up
-  static uint32_t last_health_pub = 0;
-  if (g_mqtt.connected() && (now_ms - last_health_pub > 1000)) {
-    last_health_pub = now_ms;
-
-    const SystemHealth& sh = g_health.system_health();
-
-    JsonDocument doc;
-    doc["v"] = NUCRYO_SCHEMA_V;
-    doc["ts_ms"] = now_ms;
-    doc["degraded"] = sh.degraded;
-    doc["run_allowed"] = sh.run_allowed;
-    doc["outputs_allowed"] = sh.outputs_allowed;
-    doc["warn"] = sh.warn_count;
-    doc["crit"] = sh.crit_count;
-
-    g_bus.publish_json(NET_TOPICS.health, doc, /*retained*/ false);
-  }
+  // Publish heartbeat + health when MQTT is up
+  publish_reports(now_ms);
 
   delay(5);
 }

@@ -69,13 +69,13 @@ bool NetworkManager::start_eth() {
   SPI.begin(BOARD_PINS.w5500_sck, BOARD_PINS.w5500_miso, BOARD_PINS.w5500_mosi);
 
   // Extra hard reset pulse (helps with "w5500_reset(): reset timeout" cases)
-#if (BOARD_PINS.w5500_rst >= 0)
-  pinMode(BOARD_PINS.w5500_rst, OUTPUT);
-  digitalWrite(BOARD_PINS.w5500_rst, LOW);
-  delay(50);
-  digitalWrite(BOARD_PINS.w5500_rst, HIGH);
-  delay(150);
-#endif
+  if (BOARD_PINS.w5500_rst >= 0) {
+    pinMode(BOARD_PINS.w5500_rst, OUTPUT);
+    digitalWrite(BOARD_PINS.w5500_rst, LOW);
+    delay(50);
+    digitalWrite(BOARD_PINS.w5500_rst, HIGH);
+    delay(150);
+  }
 
   // phy_addr is typically 1 in Arduino-ESP32 W5500 examples.
   bool ok = ETH.begin(ETH_PHY_W5500, /*phy_addr*/ 1,
