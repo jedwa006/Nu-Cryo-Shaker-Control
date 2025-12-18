@@ -34,7 +34,7 @@ bool IoService::topic_matches(const char* topic) const {
 void IoService::handle_message(const char* topic, const uint8_t* payload, size_t len) {
   if (!topic_matches(topic)) return;
 
-  StaticJsonDocument<256> doc;
+  JsonDocument doc(256);
   const DeserializationError err = deserializeJson(doc, payload, len);
   if (err) return;
 
