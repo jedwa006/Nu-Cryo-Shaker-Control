@@ -33,7 +33,7 @@
       bus.publish_json(subtopic, doc, false, 0);
     }
 
-    void publishers::publish_system_health(MqttBus& bus, const SystemHealth& sh, uint32_t now_ms) {
+    void publishers::publish_system_health(MqttBus& bus, const SystemHealth& sh, uint32_t now_ms, const char* subtopic) {
       StaticJsonDocument<384> doc;
       doc["v"] = NUCRYO_SCHEMA_V;
       doc["ts_ms"] = now_ms;
@@ -56,7 +56,7 @@
       summary["warn_count"] = sh.warn_count;
       summary["crit_count"] = sh.crit_count;
 
-      bus.publish_json("sys/health", doc, false, 0);
+      bus.publish_json(subtopic, doc, false, 0);
     }
 
     void publishers::publish_pid_state(MqttBus& bus, const char* pid_name, const PidState& st, uint32_t now_ms) {
