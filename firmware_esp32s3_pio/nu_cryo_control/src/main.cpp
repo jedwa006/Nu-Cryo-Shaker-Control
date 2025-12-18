@@ -57,6 +57,7 @@
 // Networking state & MQTT plumbing
 // -------------------------------------------------------------------------------------------------
 static bool g_eth_connected = false;
+static bool g_eth_static = false;
 static NetworkClient g_net_client;
 static PubSubClient g_mqtt(g_net_client);
 
@@ -228,6 +229,25 @@ static bool eth_begin()
     g_eth_connected = false;
     return false;
   }
+
+  const bool static_requested = (ETH_STATIC_IP.a | ETH_STATIC_IP.b | ETH_STATIC_IP.c | ETH_STATIC_IP.d) != 0;
+  if (static_requested) {
+    IPAddress local(ETH_STATIC_IP.a, ETH_STATIC_IP.b, ETH_STATIC_IP.c, ETH_STATIC_IP.d);
+    IPAddress gateway(ETH_STATIC_GW.a, ETH_STATIC_GW.b, ETH_STATIC_GW.c, ETH_STATIC_GW.d);
+    IPAddress subnet(ETH_STATIC_MASK.a, ETH_STATIC_MASK.b, ETH_STATIC_MASK.c, ETH_STATIC_MASK.d);
+    const bool configured = ETH.config(local, gateway, subnet, gateway);
+    g_eth_static = configured;
+
+    if (configured) {
+      Serial.print("[eth] static addressing ");
+      Serial.println(local);
+    } else {
+      Serial.println("[eth] ETH.config() failed (static) â€” using DHCP");
+    }
+  } else {
+    Serial.println("[eth] DHCP (no static IP configured)");
+    g_eth_static = false;
+  }
 #endif
   return true;
 }
@@ -285,6 +305,7 @@ static void publish_boot(uint32_t now_ms)
   doc["node"] = NODE_ID;
   doc["fw"] = "nu_cryo_control_pio";
   doc["eth"] = g_eth_connected;
+  doc["eth_static"] = g_eth_static;
 
   if (g_eth_connected) {
     doc["ip"] = ETH.localIP().toString();
