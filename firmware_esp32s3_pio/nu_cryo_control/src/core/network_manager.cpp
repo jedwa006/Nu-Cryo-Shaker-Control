@@ -2,29 +2,29 @@
 
 #include <Arduino.h>
 
-NetworkManager* NetworkManager::self_ = nullptr;
+AppNetworkManager* AppNetworkManager::self_ = nullptr;
 
-NetworkManager::NetworkManager() {
+AppNetworkManager::AppNetworkManager() {
   self_ = this;
 }
 
-bool NetworkManager::begin() {
+bool AppNetworkManager::begin() {
 #if NUCRYO_USE_ETH_W5500
-  Network.onEvent(NetworkManager::handle_event);
+  Network.onEvent(AppNetworkManager::handle_event);
   return start_eth();
 #else
   return false;
 #endif
 }
 
-void NetworkManager::handle_event(arduino_event_id_t event, arduino_event_info_t info) {
+void AppNetworkManager::handle_event(arduino_event_id_t event, arduino_event_info_t info) {
   (void)info;
   if (self_) {
     self_->on_event(event);
   }
 }
 
-void NetworkManager::on_event(arduino_event_id_t event) {
+void AppNetworkManager::on_event(arduino_event_id_t event) {
   switch (event) {
     case ARDUINO_EVENT_ETH_START:
       Serial.println("[eth] start");
@@ -63,7 +63,7 @@ void NetworkManager::on_event(arduino_event_id_t event) {
   }
 }
 
-bool NetworkManager::start_eth() {
+bool AppNetworkManager::start_eth() {
 #if NUCRYO_USE_ETH_W5500
   // Waveshare W5500 is on dedicated SPI pins.
   SPI.begin(BOARD_PINS.w5500_sck, BOARD_PINS.w5500_miso, BOARD_PINS.w5500_mosi);

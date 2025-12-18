@@ -8,9 +8,10 @@
 #include "app/app_config.h"
 
 // Manages Ethernet bring-up and link/IP state for MQTT + health monitoring.
-class NetworkManager {
+// Named AppNetworkManager to avoid colliding with Arduino-ESP32's NetworkManager.
+class AppNetworkManager {
 public:
-  NetworkManager();
+  AppNetworkManager();
 
   bool begin();
 
@@ -25,10 +26,9 @@ private:
   void on_event(arduino_event_id_t event);
   bool start_eth();
 
-  static NetworkManager* self_;
+  static AppNetworkManager* self_;
 
   bool eth_connected_ {false};
   bool eth_static_ {false};
   NetworkClient net_client_;
 };
-

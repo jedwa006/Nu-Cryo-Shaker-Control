@@ -15,7 +15,7 @@
 // -------------------------------------------------------------------------------------------------
 // Core objects
 // -------------------------------------------------------------------------------------------------
-static NetworkManager g_network;
+static AppNetworkManager g_network;
 static PubSubClient g_mqtt(g_network.client());
 static MqttBus g_bus;
 static HealthManager g_health;

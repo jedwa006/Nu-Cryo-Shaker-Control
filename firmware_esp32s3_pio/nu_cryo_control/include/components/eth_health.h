@@ -5,7 +5,7 @@
 
 class EthHealthComponent : public IHealthComponent {
 public:
-  explicit EthHealthComponent(NetworkManager& network) : network_(network) {}
+  explicit EthHealthComponent(AppNetworkManager& network) : network_(network) {}
 
   const char* name() const override { return "eth"; }
 
@@ -17,7 +17,6 @@ public:
   HealthReport report() const override { return rep_; }
 
 private:
-  NetworkManager& network_;
+  AppNetworkManager& network_;
   HealthReport rep_ {};
 };
-
