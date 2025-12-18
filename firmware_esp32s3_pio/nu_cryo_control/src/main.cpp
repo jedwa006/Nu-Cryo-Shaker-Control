@@ -10,6 +10,7 @@
 
 #include "app/app_config.h"
 #include "core/health_manager.h"
+#include "core/publishers.h"
 #include "core/mqtt_bus.h"
 
 #if NUCRYO_USE_MODBUS_RTU
@@ -26,11 +27,61 @@ static bool g_eth_static = false;
 static NetworkClient g_net_client;
 static PubSubClient g_mqtt(g_net_client);
 
+static void on_mqtt_message(const char* topic, const uint8_t* payload, size_t len)
+{
+  Serial.print("[mqtt] rx ");
+  Serial.print(topic);
+  Serial.print(" (");
+  Serial.print(len);
+  Serial.println(" bytes)");
+  // TODO: route to subsystem handlers (PID, IO, etc.)
+}
+
 // -------------------------------------------------------------------------------------------------
 // Core objects
 // -------------------------------------------------------------------------------------------------
 static HealthManager g_health;
 static MqttBus g_bus;
+
+class PublishScheduler {
+public:
+  PublishScheduler(MqttBus& bus, HealthManager& health)
+    : bus_(bus), health_(health) {}
+
+  void tick(uint32_t now_ms, bool mqtt_connected) {
+    if (!mqtt_connected) return;
+
+    if (now_ms - last_heartbeat_ms_ >= HEARTBEAT_PERIOD_MS) {
+      last_heartbeat_ms_ = now_ms;
+      const uint32_t uptime_s = now_ms / 1000;
+      publishers::publish_heartbeat(bus_, now_ms, uptime_s);
+    }
+
+    if (now_ms - last_system_health_ms_ >= SYS_HEALTH_PERIOD_MS) {
+      last_system_health_ms_ = now_ms;
+      publishers::publish_system_health(bus_, health_.system_health(), now_ms);
+    }
+
+    if (now_ms - last_component_health_ms_ >= COMPONENT_HEALTH_PERIOD_MS) {
+      last_component_health_ms_ = now_ms;
+      for (size_t i = 0; i < health_.count(); ++i) {
+        IHealthComponent* c = health_.component(i);
+        if (c) {
+          publishers::publish_component_health(bus_, *c, now_ms);
+        }
+      }
+    }
+  }
+
+private:
+  MqttBus& bus_;
+  HealthManager& health_;
+  uint32_t last_heartbeat_ms_ {0};
+  uint32_t last_system_health_ms_ {0};
+  uint32_t last_component_health_ms_ {0};
+};
+
+static PublishScheduler g_publish_scheduler(g_bus, g_health);
 
 // -------------------------------------------------------------------------------------------------
 // Health component: Ethernet link
@@ -228,9 +279,16 @@ static bool mqtt_connect(uint32_t now_ms)
   lwt_buf[n] = ' ';
 
   const String willTopic = mqtt_full_topic(NET_TOPICS.lwt);
-  return g_mqtt.connect(NODE_ID, willTopic.c_str(),
-                        /*willQos*/ 1, /*willRetain*/ true,
-                        /*willMessage*/ lwt_buf);
+  const bool connected = g_mqtt.connect(NODE_ID, willTopic.c_str(),
+                                        /*willQos*/ 1, /*willRetain*/ true,
+                                        /*willMessage*/ lwt_buf);
+
+  if (connected) {
+    // Subscribe to command topics (pid/*/cmd/*, io/*/cmd/*, etc.)
+    g_bus.subscribe("+/cmd/#");
+  }
+
+  return connected;
 }
 
 static void publish_lwt_online(uint32_t now_ms)
@@ -270,6 +328,7 @@ void setup()
 
   // Bus can be initialized before MQTT connects; it just stores root + callback shims.
   g_bus.begin(g_mqtt, MACHINE_ID, NODE_ID);
+  g_bus.set_handler(on_mqtt_message);
 
   // Health policy: register and configure components
   eth_health.configure(/*expected*/ true, /*required*/ true);
@@ -343,24 +402,8 @@ void loop()
   // Evaluate system health (stale logic + aggregation)
   g_health.evaluate(now_ms);
 
-  // Publish health summary (1 Hz) when MQTT is up
-  static uint32_t last_health_pub = 0;
-  if (g_mqtt.connected() && (now_ms - last_health_pub > 1000)) {
-    last_health_pub = now_ms;
-
-    const SystemHealth& sh = g_health.system_health();
-
-    JsonDocument doc;
-    doc["v"] = NUCRYO_SCHEMA_V;
-    doc["ts_ms"] = now_ms;
-    doc["degraded"] = sh.degraded;
-    doc["run_allowed"] = sh.run_allowed;
-    doc["outputs_allowed"] = sh.outputs_allowed;
-    doc["warn"] = sh.warn_count;
-    doc["crit"] = sh.crit_count;
-
-    g_bus.publish_json(NET_TOPICS.health, doc, /*retained*/ false);
-  }
+  // Publish heartbeat + health via scheduler when MQTT is up
+  g_publish_scheduler.tick(now_ms, g_mqtt.connected());
 
   delay(5);
 }
