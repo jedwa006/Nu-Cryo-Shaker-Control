@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-#include "../waveshare_vendor/WS_DIN.h"
+#include <WS_DIN.h>
 
 namespace {
 constexpr uint8_t kDinPins[8] = {
