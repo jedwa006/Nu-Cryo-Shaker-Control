@@ -60,6 +60,7 @@ HealthManager make_health_fault(uint32_t now_ms) {
   health.evaluate(now_ms);
   return health;
 }
+} // namespace
 
 void test_start_sets_running_state() {
   RunControl run;
@@ -135,15 +136,4 @@ void test_health_fault_blocks_start_until_reset() {
   err = nullptr;
   TEST_ASSERT_TRUE(run.handle_command(RunCommand::RESET, health_ok, din, now_ms + 20, &err));
   TEST_ASSERT_NULL(err);
-}
-} // namespace
-
-int main(int argc, char** argv) {
-  (void)argc;
-  (void)argv;
-  UNITY_BEGIN();
-  RUN_TEST(test_start_sets_running_state);
-  RUN_TEST(test_estop_latch_requires_reset);
-  RUN_TEST(test_health_fault_blocks_start_until_reset);
-  return UNITY_END();
 }

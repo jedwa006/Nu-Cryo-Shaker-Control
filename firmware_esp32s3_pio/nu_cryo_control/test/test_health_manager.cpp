@@ -25,6 +25,7 @@ private:
   HealthReport report_ {};
   uint32_t stale_timeout_ms_ {0};
 };
+} // namespace
 
 void test_required_component_fault_sets_inhibit() {
   HealthManager health;
@@ -90,15 +91,4 @@ void test_stale_required_component_inhibits_run() {
   TEST_ASSERT_EQUAL(HealthStatus::ERROR, sys.system_state);
   TEST_ASSERT_FALSE(sys.run_allowed);
   TEST_ASSERT_FALSE(sys.outputs_allowed);
-}
-} // namespace
-
-int main(int argc, char** argv) {
-  (void)argc;
-  (void)argv;
-  UNITY_BEGIN();
-  RUN_TEST(test_required_component_fault_sets_inhibit);
-  RUN_TEST(test_optional_component_fault_degrades_only);
-  RUN_TEST(test_stale_required_component_inhibits_run);
-  return UNITY_END();
 }
