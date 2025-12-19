@@ -36,10 +36,40 @@ struct ModbusConfig {
   uint8_t pid_heat1_id;
   uint8_t pid_heat2_id;
   uint8_t pid_cool1_id;
+  bool pid_heat1_expected;
+  bool pid_heat1_required;
+  bool pid_heat2_expected;
+  bool pid_heat2_required;
+  bool pid_cool1_expected;
+  bool pid_cool1_required;
 };
 
 #ifndef NUCRYO_WAVESHARE_RS485_DE_RE_PIN
 #define NUCRYO_WAVESHARE_RS485_DE_RE_PIN -1
+#endif
+
+#ifndef NUCRYO_PID_HEAT1_EXPECTED
+#define NUCRYO_PID_HEAT1_EXPECTED true
+#endif
+
+#ifndef NUCRYO_PID_HEAT1_REQUIRED
+#define NUCRYO_PID_HEAT1_REQUIRED false
+#endif
+
+#ifndef NUCRYO_PID_HEAT2_EXPECTED
+#define NUCRYO_PID_HEAT2_EXPECTED true
+#endif
+
+#ifndef NUCRYO_PID_HEAT2_REQUIRED
+#define NUCRYO_PID_HEAT2_REQUIRED false
+#endif
+
+#ifndef NUCRYO_PID_COOL1_EXPECTED
+#define NUCRYO_PID_COOL1_EXPECTED true
+#endif
+
+#ifndef NUCRYO_PID_COOL1_REQUIRED
+#define NUCRYO_PID_COOL1_REQUIRED true
 #endif
 
 inline constexpr BoardPins BOARD_WAVESHARE_PINS{
@@ -76,4 +106,10 @@ inline constexpr ModbusConfig BOARD_WAVESHARE_MODBUS{
   .pid_heat1_id = 1,
   .pid_heat2_id = 2,
   .pid_cool1_id = 3,
+  .pid_heat1_expected = NUCRYO_PID_HEAT1_EXPECTED,
+  .pid_heat1_required = NUCRYO_PID_HEAT1_REQUIRED,
+  .pid_heat2_expected = NUCRYO_PID_HEAT2_EXPECTED,
+  .pid_heat2_required = NUCRYO_PID_HEAT2_REQUIRED,
+  .pid_cool1_expected = NUCRYO_PID_COOL1_EXPECTED,
+  .pid_cool1_required = NUCRYO_PID_COOL1_REQUIRED,
 };

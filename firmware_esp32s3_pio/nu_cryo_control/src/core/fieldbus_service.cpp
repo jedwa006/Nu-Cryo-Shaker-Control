@@ -29,9 +29,9 @@ bool FieldbusService::begin() {
 
 void FieldbusService::register_components(HealthRegistry& registry) {
 #if NUCRYO_USE_MODBUS_RTU
-  registry.register_component(pid_heat1_, /*expected*/ true, /*required*/ false);  // Normally True
-  registry.register_component(pid_heat2_, /*expected*/ true, /*required*/ false);  // Normally True
-  registry.register_component(pid_cool1_, /*expected*/ true, /*required*/ true);
+  registry.register_component(pid_heat1_, MODBUS_CONFIG.pid_heat1_expected, MODBUS_CONFIG.pid_heat1_required);
+  registry.register_component(pid_heat2_, MODBUS_CONFIG.pid_heat2_expected, MODBUS_CONFIG.pid_heat2_required);
+  registry.register_component(pid_cool1_, MODBUS_CONFIG.pid_cool1_expected, MODBUS_CONFIG.pid_cool1_required);
 #else
   (void)registry;
 #endif
