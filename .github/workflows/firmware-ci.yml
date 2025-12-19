@@ -9,6 +9,15 @@ on:
     paths:
       - 'firmware_esp32s3_pio/**'
       - '.github/workflows/firmware-ci.yml'
+  workflow_dispatch:
+    inputs:
+      run_native_tests:
+        description: 'Run native unit tests (pio test -e native)'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
 
 jobs:
   build-firmware:
@@ -39,8 +48,9 @@ jobs:
 
       - name: Run native unit tests
         working-directory: firmware_esp32s3_pio/nu_cryo_control
-        # TODO: Re-enable or gate native tests once CI support is ready.
-        if: false
+        # Opt-in gate: set workflow_dispatch input run_native_tests=true
+        # or define repository variable RUN_NATIVE_TESTS=true to enable.
+        if: ${{ inputs.run_native_tests == 'true' || vars.RUN_NATIVE_TESTS == 'true' }}
         run: pio test -e native
 
       - name: Upload firmware artifacts
