@@ -31,6 +31,8 @@ GitHub Actions runs the same build on PRs via `.github/workflows/firmware-ci.yml
 - Brings up the W5500 Ethernet interface with optional static IP fallback to DHCP. Publishes boot metadata, a retained LWT (`status/lwt`), and per-component/system health snapshots under `<MACHINE_ID>/<NODE_ID>/...`.
 - Polls three Modbus RTU PID controllers (~5 Hz) and reports PV/SV/output% along with health state. Register offsets are placeholders pending alignment with the deployed PIDs.
 - Uses `RunControl` to combine health + DIN interlocks into a run/hold/stop/estop state machine, exposing `run_allowed` / `outputs_allowed` gating for IO and motion control.
+- Run control commands and acknowledgements are defined in `docs/protocol.md` (`run/cmd`, `run/ack`, and `status/health`).
+- PID expected/required flags and Modbus IDs are centralized in `firmware_esp32s3_pio/nu_cryo_control/include/config/board_waveshare.h` for easy test configuration.
 
 For deeper details on MQTT topics, message cadence, and the health/run levels, see `docs/firmware_architecture.md` and `docs/protocol.md`.
 

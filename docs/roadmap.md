@@ -5,7 +5,7 @@ This plan captures the next set of firmware tasks after the PlatformIO migration
 ## 1) DIN (digital inputs) with isolation
 
 - ✅ Implemented: `waveshare_hal::DinHal` wraps `WS_DIN.*` with inversion preserved, `DinComponent` (required) drives health, and `io/din/state` + `io/din/event` publish the 8-bit mask (estop/lid/door on bits 0–2) at `IO_STATE_PERIOD_MS`.
-- Next: feed DIN interlocks into the run/estop state machine once it lands, and add any bit-to-signal mapping needed for auxiliary sensors.
+- Next: add any bit-to-signal mapping needed for auxiliary sensors and confirm the expected wiring against the interlock definitions.
 
 ## 2) RO (relay outputs) through the GPIO expander
 
@@ -14,13 +14,15 @@ This plan captures the next set of firmware tasks after the PlatformIO migration
 
 ## 3) Finish run/estop control plane
 
-- ✅ Implemented: `RunControl` now owns a run/hold/stop/estop state machine, consumes `HealthManager` + DIN interlocks, publishes status, and gates `run_allowed`/`outputs_allowed` for IO command enforcement.
+- ✅ Implemented: `RunControl` owns a run/hold/stop/estop state machine, consumes `HealthManager` + DIN interlocks, publishes status, and gates `run_allowed`/`outputs_allowed` for IO command enforcement.
+- Next: validate `run/cmd` + `run/ack` flows with the HMI dashboard and document any operator UI expectations.
 - Next: tune state transitions/reasons with real hardware inputs, and run integration testing of the MQTT run command/ack flow (start/stop/hold/reset) alongside DIN/health faults.
 
 ## 4) Align Modbus PID mapping and coverage
 
 - Replace the placeholder PID registers (`REG_PV`, `REG_SV`, `REG_OUT_PCT`) with the real map and scaling for the deployed controllers; extend `PidModbusComponent` to surface alarms if available. 
-- Add a periodic params publisher (`PID_PARAMS_PERIOD_MS`) once the register map is finalized so dashboards can visualize tuning/limits.
+- ✅ Implemented: periodic params publisher (`PID_PARAMS_PERIOD_MS`) to support tuning/limits visualization.
+- Next: finalize the register map + scaling and verify params against a known-good controller.
 
 ## 5) Validation and CI coverage
 

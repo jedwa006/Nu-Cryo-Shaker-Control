@@ -3,7 +3,7 @@
 This document tracks the MQTT topics and state machine used by the cryo shaker control stack. It covers two layers:
 
 - **Current PlatformIO baseline (health + PID telemetry):** Implemented today in `firmware_esp32s3_pio/nu_cryo_control`, rooted at `<MACHINE_ID>/<NODE_ID>/` with heartbeat/health/PID topics.
-- **Run/HMI control draft (v0):** The legacy `mill/*` topic map below describes the intended HMI command set. It will be aligned with the new root once the run/estop state machine lands.
+- **Run/HMI control draft (v0):** The legacy `mill/*` topic map below describes the original HMI command set. The run/estop control plane is now implemented under the `<MACHINE_ID>/<NODE_ID>/` root, so treat the `mill/*` map as historical reference.
 
 ---
 
@@ -131,7 +131,7 @@ The HMI should honor `run_allowed`/`outputs_allowed` when implementing run/estop
 
 ## Legacy HMI command set (v0 draft)
 
-The original dashboard prototype used the `mill/*` topic map below. When the run/estop control plane is implemented on the PlatformIO firmware, migrate these semantics to the `<MACHINE_ID>/<NODE_ID>/` root.
+The original dashboard prototype used the `mill/*` topic map below. The PlatformIO firmware now implements run/estop control under the `<MACHINE_ID>/<NODE_ID>/` root (`run/cmd`, `run/ack`, and `status/health`), so treat the legacy map as deprecated and migrate any remaining dashboards accordingly.
 
 ---
 
