@@ -121,12 +121,12 @@ void test_health_fault_blocks_start_until_reset() {
 }
 } // namespace
 
-void setup() {
+int main(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
   UNITY_BEGIN();
   RUN_TEST(test_start_sets_running_state);
   RUN_TEST(test_estop_latch_requires_reset);
   RUN_TEST(test_health_fault_blocks_start_until_reset);
-  UNITY_END();
+  return UNITY_END();
 }
-
-void loop() {}

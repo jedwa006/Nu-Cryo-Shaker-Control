@@ -93,12 +93,12 @@ void test_stale_required_component_inhibits_run() {
 }
 } // namespace
 
-void setup() {
+int main(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
   UNITY_BEGIN();
   RUN_TEST(test_required_component_fault_sets_inhibit);
   RUN_TEST(test_optional_component_fault_degrades_only);
   RUN_TEST(test_stale_required_component_inhibits_run);
-  UNITY_END();
+  return UNITY_END();
 }
-
-void loop() {}
