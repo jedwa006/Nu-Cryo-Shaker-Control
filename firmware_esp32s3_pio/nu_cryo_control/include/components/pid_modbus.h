@@ -19,8 +19,8 @@
       void configure(bool expected, bool required) override;
 
       bool probe(uint32_t now_ms) override;
-      bool tick(uint32_t now_ms) override { return tick(now_ms, true); }
-      bool tick(uint32_t now_ms, bool scheduled);
+      bool tick(uint32_t now_ms) override;
+      bool start_read(uint32_t now_ms);
 
       uint32_t stale_timeout_ms() const override { return stale_timeout_ms_; }
       HealthReport report() const override { return rep_; }
@@ -49,7 +49,5 @@
 
       static PidModbusComponent* active_request_;
       static bool on_transaction(Modbus::ResultCode result, uint16_t, void*);
-
-      bool start_read(uint32_t now_ms);
       void handle_transaction(Modbus::ResultCode result);
     };
