@@ -86,3 +86,13 @@ inline int16_t encode_percent(float percent) { return static_cast<int16_t>(perce
 static constexpr uint16_t REG_PV = LC108::PV;
 static constexpr uint16_t REG_SV = LC108::SV;
 static constexpr uint16_t REG_OUT_PCT = LC108::MV1;
+static constexpr uint16_t REG_STATUS = LC108::STATUS;
+static constexpr uint16_t REG_ALARM1 = LC108::AL1;
+static constexpr uint16_t REG_ALARM2 = LC108::AL2;
+static constexpr uint16_t REG_P1 = LC108::P1;
+static constexpr uint16_t REG_I1 = LC108::I1;
+static constexpr uint16_t REG_D1 = LC108::D1;
+static constexpr uint16_t REG_OPL1 = LC108::OPL1;
+static constexpr uint16_t REG_OPH1 = LC108::OPH1;
+static constexpr uint16_t REG_LSPL = LC108::LSPL;
+static constexpr uint16_t REG_USPL = LC108::USPL;

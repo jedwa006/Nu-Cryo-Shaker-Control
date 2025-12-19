@@ -32,5 +32,7 @@ private:
   bool enabled_ {false};
   uint32_t last_pid_tick_ms_ {0};
   uint8_t next_pid_index_ {0};
+  uint32_t last_pid_params_ms_ {0};
+  uint8_t next_pid_params_index_ {0};
 #endif
 };

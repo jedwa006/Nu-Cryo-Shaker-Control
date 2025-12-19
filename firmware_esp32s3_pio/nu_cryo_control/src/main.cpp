@@ -120,6 +120,26 @@ static void publish_reports(uint32_t now_ms)
       }
     }
   }
+
+#if NUCRYO_USE_MODBUS_RTU
+  if (g_fieldbus.enabled()) {
+    static uint32_t last_pid_state_pub = 0;
+    if (now_ms - last_pid_state_pub >= PID_STATE_PERIOD_MS) {
+      last_pid_state_pub = now_ms;
+      publishers::publish_pid_state(g_bus, g_fieldbus.pid_heat1().name(), g_fieldbus.pid_heat1().state(), now_ms);
+      publishers::publish_pid_state(g_bus, g_fieldbus.pid_heat2().name(), g_fieldbus.pid_heat2().state(), now_ms);
+      publishers::publish_pid_state(g_bus, g_fieldbus.pid_cool1().name(), g_fieldbus.pid_cool1().state(), now_ms);
+    }
+
+    static uint32_t last_pid_params_pub = 0;
+    if (now_ms - last_pid_params_pub >= PID_PARAMS_PERIOD_MS) {
+      last_pid_params_pub = now_ms;
+      publishers::publish_pid_params(g_bus, g_fieldbus.pid_heat1().name(), g_fieldbus.pid_heat1().params(), now_ms);
+      publishers::publish_pid_params(g_bus, g_fieldbus.pid_heat2().name(), g_fieldbus.pid_heat2().params(), now_ms);
+      publishers::publish_pid_params(g_bus, g_fieldbus.pid_cool1().name(), g_fieldbus.pid_cool1().params(), now_ms);
+    }
+  }
+#endif
 }
 
 // -------------------------------------------------------------------------------------------------
