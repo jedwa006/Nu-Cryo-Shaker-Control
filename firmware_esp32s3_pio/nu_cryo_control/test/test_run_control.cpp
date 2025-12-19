@@ -1,5 +1,6 @@
 #include <unity.h>
 
+#include "components/din.h"
 #include "core/health_manager.h"
 #include "core/run_control.h"
 
@@ -62,12 +63,17 @@ HealthManager make_health_fault(uint32_t now_ms) {
 
 void test_start_sets_running_state() {
   RunControl run;
-  DinComponent din;
-  din.set_interlocks_ok(true);
+  DinHal hal;
+  DinComponent din(hal);
+  din.configure(true, true);
+  hal.set_mask(static_cast<uint8_t>((1u << DinComponent::BIT_ESTOP_OK)
+                                    | (1u << DinComponent::BIT_LID_LOCKED)
+                                    | (1u << DinComponent::BIT_DOOR_CLOSED)));
 
   const uint32_t now_ms = 100;
   HealthManager health = make_health_ok(now_ms);
 
+  din.probe(now_ms);
   const char* err = nullptr;
   TEST_ASSERT_TRUE(run.handle_command(RunCommand::START, health, din, now_ms, &err));
   TEST_ASSERT_NULL(err);
@@ -78,17 +84,23 @@ void test_start_sets_running_state() {
 
 void test_estop_latch_requires_reset() {
   RunControl run;
-  DinComponent din;
-  din.set_reason("estop_tripped");
+  DinHal hal;
+  DinComponent din(hal);
+  din.configure(true, true);
 
   uint32_t now_ms = 100;
   HealthManager health = make_health_ok(now_ms);
 
-  din.set_interlocks_ok(false);
+  hal.set_mask(static_cast<uint8_t>((1u << DinComponent::BIT_LID_LOCKED)
+                                    | (1u << DinComponent::BIT_DOOR_CLOSED)));
+  din.probe(now_ms);
   run.update(health, din, now_ms);
   TEST_ASSERT_EQUAL(RunState::ESTOP, run.status().state);
 
-  din.set_interlocks_ok(true);
+  hal.set_mask(static_cast<uint8_t>((1u << DinComponent::BIT_ESTOP_OK)
+                                    | (1u << DinComponent::BIT_LID_LOCKED)
+                                    | (1u << DinComponent::BIT_DOOR_CLOSED)));
+  din.tick(now_ms + 5);
   const char* err = nullptr;
   TEST_ASSERT_FALSE(run.handle_command(RunCommand::START, health, din, now_ms + 10, &err));
   TEST_ASSERT_EQUAL_STRING("inhibited", err);
@@ -101,12 +113,17 @@ void test_estop_latch_requires_reset() {
 
 void test_health_fault_blocks_start_until_reset() {
   RunControl run;
-  DinComponent din;
-  din.set_interlocks_ok(true);
+  DinHal hal;
+  DinComponent din(hal);
+  din.configure(true, true);
+  hal.set_mask(static_cast<uint8_t>((1u << DinComponent::BIT_ESTOP_OK)
+                                    | (1u << DinComponent::BIT_LID_LOCKED)
+                                    | (1u << DinComponent::BIT_DOOR_CLOSED)));
 
   uint32_t now_ms = 200;
   HealthManager health_fault = make_health_fault(now_ms);
 
+  din.probe(now_ms);
   run.update(health_fault, din, now_ms);
   TEST_ASSERT_EQUAL(RunState::STOPPED, run.status().state);
 
