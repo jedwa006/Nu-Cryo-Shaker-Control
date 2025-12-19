@@ -37,6 +37,10 @@ jobs:
         working-directory: firmware_esp32s3_pio/nu_cryo_control
         run: pio run -e esp32s3_arduino
 
+      - name: Run native unit tests
+        working-directory: firmware_esp32s3_pio/nu_cryo_control
+        run: pio test -e native
+
       - name: Upload firmware artifacts
         if: always()
         uses: actions/upload-artifact@v4
