@@ -1,4 +1,3 @@
-\
 #include "core/mqtt_bus.h"
     MqttBus* MqttBus::self_ = nullptr;
 
