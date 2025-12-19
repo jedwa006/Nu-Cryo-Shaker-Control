@@ -14,9 +14,13 @@ FieldbusService::FieldbusService()
 bool FieldbusService::begin() {
 #if NUCRYO_USE_MODBUS_RTU
   Serial1.begin(MODBUS_CONFIG.baud, SERIAL_8N1, MODBUS_CONFIG.rx_pin, MODBUS_CONFIG.tx_pin);
-  mb_.begin(&Serial1);
+  mb_.begin(&Serial1, MODBUS_CONFIG.de_re_pin);
   mb_.master();
   enabled_ = true;
+  const uint32_t now_ms = millis();
+  pid_heat1_.probe(now_ms);
+  pid_heat2_.probe(now_ms);
+  pid_cool1_.probe(now_ms);
   return true;
 #else
   return false;

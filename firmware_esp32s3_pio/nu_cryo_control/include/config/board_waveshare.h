@@ -64,7 +64,7 @@ inline constexpr NetTopics BOARD_WAVESHARE_TOPICS{
 };
 
 inline constexpr ModbusConfig BOARD_WAVESHARE_MODBUS{
-  .baud = 115200,
+  .baud = 9600,
   .tx_pin = 17,
   .rx_pin = 18,
   .de_re_pin = -1,
