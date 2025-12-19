@@ -37,7 +37,7 @@ The runtime is composed of a few small services that are stitched together in `s
 ## Levels and priorities
 
 - **Health level:** Aggregates component health into `system_state`, `degraded`, `run_allowed`, and `outputs_allowed`. Required component failures force `run_allowed=false` and `outputs_allowed=false`, which should gate any run/estop logic. Optional failures keep `run_allowed=true` but mark the system degraded. 
-- **Run / estop level:** A full run/hold/stop/estop state machine is not yet implemented in this branch. When adding it, consume the health-derived flags above so that emergency inputs (e.g., DIN estop/door/lid via `DinComponent`) and Modbus faults can immediately inhibit motion or outputs. Relay output commands are already gated on `outputs_allowed` in the IO service.
+- **Run / estop level:** A run/hold/stop/estop state machine is implemented in `src/core/run_control.*`. It consumes `HealthManager` output plus DIN interlocks to latch estops/health faults, exposes a `RunStatus` (state + reason), and recomputes gating. `run_allowed` is `true` only in `RUNNING`, while `outputs_allowed` is `true` in `RUNNING` or `HOLDING`. The IO service blocks relay commands when `outputs_allowed=false`, and run commands are rejected while estop/health faults are latched until a `RESET` is accepted.
 
 ## Tricky or easy-to-miss details
 
