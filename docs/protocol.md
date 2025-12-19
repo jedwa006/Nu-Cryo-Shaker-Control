@@ -16,7 +16,7 @@ Root prefix: `<MACHINE_ID>/<NODE_ID>/` (e.g., `cryo_mill_01/esp32a`). Topic name
 | MCU → HMI | `status/lwt` (retained, QoS1)   | Last Will: `state: offline`; publishes `state: online` on connect. |
 | MCU → HMI | `status/boot` (retained)        | Boot metadata: schema version, timestamp, node id, firmware name, Ethernet status/IP. |
 | MCU → HMI | `sys/heartbeat` (QoS0)          | 1 Hz heartbeat with uptime and timestamps. |
-| MCU → HMI | `status/health` (QoS0)          | Aggregate health: `system_state` (`OK/DEGRADED/FAULT`), inhibit flags (`run_allowed`, `outputs_allowed`), warning/critical counts. |
+| MCU → HMI | `status/health` (QoS0)          | Aggregate health: `system_state` (`OK/DEGRADED/FAULT`), run state (`run_state`, `run_reason`), inhibit flags (`run_allowed`, `outputs_allowed`), warning/critical counts. |
 | MCU → HMI | `health/<component>/state`      | Per-component health snapshots (Ethernet, PID controllers, optional sensors). |
 | MCU → HMI | `pid/<name>/state` (QoS0)       | PV/SV/output% + validity at ~5 Hz for each configured PID (`pid_heat1`, `pid_heat2`, `pid_cool1`). |
 | MCU → HMI | `io/din/state` (QoS0)           | Digital input mask (8 bits, DIN inversion applied) at `IO_STATE_PERIOD_MS` (200 ms). |
@@ -24,13 +24,18 @@ Root prefix: `<MACHINE_ID>/<NODE_ID>/` (e.g., `cryo_mill_01/esp32a`). Topic name
 | HMI → MCU | `io/cmd/event` (QoS0/1)         | IO command input: set full relay mask (`mask`) or a single `channel` + `state`. Includes `cmd_id`. |
 | MCU → HMI | `io/dout/state` (QoS0)          | Relay output mask + `outputs_allowed` at `IO_STATE_PERIOD_MS` (200 ms). |
 | MCU → HMI | `io/dout/ack` (QoS0/1)          | Ack for `io/cmd/event` with `cmd_id/ok/err` + resulting mask/permissions. |
+| HMI → MCU | `run/cmd` (QoS0/1)              | Run control command (`start/stop/hold/reset`) with `cmd_id`. |
+| MCU → HMI | `run/ack` (QoS0/1)              | Ack for `run/cmd` with `cmd_id/ok/err` + run state/permissions. |
 
 Health aggregation rules (implemented in `HealthManager`):
 
 - Any **required** component in `MISSING/ERROR/STALE` ⇒ `system_state=FAULT`, `run_allowed=false`, `outputs_allowed=false`.
 - Optional component failure ⇒ `system_state=DEGRADED`, `run_allowed=true`, `outputs_allowed=true`.
 - `UNCONFIGURED` does not affect the aggregate state.
-- The DIN component is marked **required**; estop/lid/door faults drive `run_allowed=false` and `outputs_allowed=false`, which also gate output commands.
+- The DIN component is marked **required**; estop/lid/door faults drive `system_state=FAULT`.
+
+Run control applies operator commands on top of health + DIN interlocks, with priority:
+DIN estop > required health faults > operator command state.
 
 The HMI should honor `run_allowed`/`outputs_allowed` when implementing run/estop logic and IO control.
 
@@ -81,6 +86,44 @@ The HMI should honor `run_allowed`/`outputs_allowed` when implementing run/estop
     "v": 1, "ts_ms": 123460, "src": "esp32a",
     "cmd_id": 42, "ok": true,
     "mask": 129, "outputs_allowed": true
+  }
+  ```
+
+### Run control topics and payloads
+
+- `run/cmd` (HMI → MCU, QoS0/1): run control command
+
+  ```json
+  { "cmd_id": 10, "cmd": "start" }
+  { "cmd_id": 11, "cmd": "hold" }
+  { "cmd_id": 12, "cmd": "stop" }
+  { "cmd_id": 13, "cmd": "reset" }
+  ```
+
+  Commands are rejected with `inhibited` when an estop or required health fault is latched. `reset`
+  is rejected with `reset_inhibited` unless interlocks and required health are OK.
+
+- `run/ack` (MCU → HMI, QoS0/1): acknowledgement for `run/cmd`
+
+  ```json
+  {
+    "v": 1, "ts_ms": 123460, "src": "esp32a",
+    "cmd_id": 10, "ok": true,
+    "state": "RUNNING", "reason": "operator_start",
+    "run_allowed": true, "outputs_allowed": true
+  }
+  ```
+
+- `status/health` additions (MCU → HMI, QoS0): run state and reason
+
+  ```json
+  {
+    "v": 1, "ts_ms": 123456, "src": "esp32a",
+    "system_state": "OK",
+    "run_state": "HOLDING",
+    "run_reason": "operator_hold",
+    "inhibit": { "run_allowed": false, "outputs_allowed": true },
+    "summary": { "warn_count": 0, "crit_count": 0 }
   }
   ```
 

@@ -6,14 +6,15 @@
 #include "app/app_config.h"
 #include "core/publishers.h"
 
-IoService::IoService(MqttBus& bus, HealthManager& health)
-  : bus_(bus), health_(health), din_(din_hal_), relay_(relay_hal_) {}
+IoService::IoService(MqttBus& bus, HealthManager& health, RunControl& run_control)
+  : bus_(bus), health_(health), run_control_(run_control), din_(din_hal_), relay_(relay_hal_) {}
 
 void IoService::begin() {
 }
 
 void IoService::on_mqtt_connected() {
   bus_.subscribe("io/cmd/event");
+  bus_.subscribe("run/cmd");
 }
 
 void IoService::register_components(HealthRegistry& registry) {
@@ -21,18 +22,19 @@ void IoService::register_components(HealthRegistry& registry) {
   registry.register_component(relay_, /*expected*/ true, /*required*/ true);
 }
 
-bool IoService::topic_matches(const char* topic) const {
+const char* IoService::subtopic_from_root(const char* topic) const {
   const char* root = bus_.root();
   const size_t root_len = strlen(root);
-  if (strncmp(topic, root, root_len) != 0) return false;
+  if (strncmp(topic, root, root_len) != 0) return nullptr;
 
   const char* sub = topic + root_len;
   if (*sub == '/') ++sub;
-  return strcmp(sub, "io/cmd/event") == 0;
+  return sub;
 }
 
 void IoService::handle_message(const char* topic, const uint8_t* payload, size_t len) {
-  if (!topic_matches(topic)) return;
+  const char* subtopic = subtopic_from_root(topic);
+  if (!subtopic) return;
 
   DynamicJsonDocument doc(256);
   const DeserializationError err = deserializeJson(doc, payload, len);
@@ -40,12 +42,15 @@ void IoService::handle_message(const char* topic, const uint8_t* payload, size_t
 
   const uint32_t cmd_id = doc["cmd_id"] | 0;
   const uint32_t now_ms = millis();
-  handle_command(doc, now_ms, cmd_id);
+  if (strcmp(subtopic, "io/cmd/event") == 0) {
+    handle_command(doc, now_ms, cmd_id);
+  } else if (strcmp(subtopic, "run/cmd") == 0) {
+    handle_run_command(doc, now_ms, cmd_id);
+  }
 }
 
 bool IoService::outputs_allowed() const {
-  const SystemHealth& sh = health_.system_health();
-  return sh.outputs_allowed && din_.interlocks_ok();
+  return run_control_.outputs_allowed();
 }
 
 bool IoService::handle_command(const JsonDocument& doc, uint32_t now_ms, uint32_t cmd_id) {
@@ -73,6 +78,28 @@ bool IoService::handle_command(const JsonDocument& doc, uint32_t now_ms, uint32_
 
   publishers::publish_dout_ack(bus_, now_ms, cmd_id, false, "invalid_payload", relay_.mask(), outputs_ok);
   return false;
+}
+
+bool IoService::handle_run_command(const JsonDocument& doc, uint32_t now_ms, uint32_t cmd_id) {
+  const char* cmd_str = doc["cmd"] | "";
+  RunCommand cmd;
+  if (strcmp(cmd_str, "start") == 0) {
+    cmd = RunCommand::START;
+  } else if (strcmp(cmd_str, "stop") == 0) {
+    cmd = RunCommand::STOP;
+  } else if (strcmp(cmd_str, "hold") == 0) {
+    cmd = RunCommand::HOLD;
+  } else if (strcmp(cmd_str, "reset") == 0) {
+    cmd = RunCommand::RESET;
+  } else {
+    publishers::publish_run_ack(bus_, now_ms, cmd_id, false, run_control_.status(), "invalid_cmd");
+    return false;
+  }
+
+  const char* err = nullptr;
+  const bool ok = run_control_.handle_command(cmd, health_, din_, now_ms, &err);
+  publishers::publish_run_ack(bus_, now_ms, cmd_id, ok, run_control_.status(), err);
+  return ok;
 }
 
 bool IoService::apply_mask(uint8_t mask, uint32_t now_ms) {

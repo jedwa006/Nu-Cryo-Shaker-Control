@@ -5,12 +5,13 @@
 #include "core/health_manager.h"
 #include "core/health_registry.h"
 #include "core/mqtt_bus.h"
+#include "core/run_control.h"
 #include "components/din.h"
 #include "components/relay_component.h"
 
 class IoService {
 public:
-  IoService(MqttBus& bus, HealthManager& health);
+  IoService(MqttBus& bus, HealthManager& health, RunControl& run_control);
 
   void begin();
   void on_mqtt_connected();
@@ -23,13 +24,15 @@ public:
 
 private:
   bool handle_command(const JsonDocument& doc, uint32_t now_ms, uint32_t cmd_id);
+  bool handle_run_command(const JsonDocument& doc, uint32_t now_ms, uint32_t cmd_id);
   bool apply_mask(uint8_t mask, uint32_t now_ms);
   bool apply_channel(uint8_t channel, bool state, uint32_t now_ms);
   bool outputs_allowed() const;
-  bool topic_matches(const char* topic) const;
+  const char* subtopic_from_root(const char* topic) const;
 
   MqttBus& bus_;
   HealthManager& health_;
+  RunControl& run_control_;
   DinHal din_hal_;
   RelayHal relay_hal_;
   DinComponent din_;

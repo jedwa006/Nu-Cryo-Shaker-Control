@@ -33,7 +33,8 @@ void publishers::publish_component_health(MqttBus& bus, const IHealthComponent& 
   bus.publish_json(subtopic, doc, false, 0);
 }
 
-void publishers::publish_system_health(MqttBus& bus, const SystemHealth& sh, uint32_t now_ms, const char* subtopic) {
+void publishers::publish_system_health(MqttBus& bus, const SystemHealth& sh, const RunStatus& run,
+                                       uint32_t now_ms, const char* subtopic) {
   DynamicJsonDocument doc(384);
   doc["v"] = NUCRYO_SCHEMA_V;
   doc["ts_ms"] = now_ms;
@@ -47,9 +48,12 @@ void publishers::publish_system_health(MqttBus& bus, const SystemHealth& sh, uin
   doc["system_state"] = system_state;
   doc["degraded"] = sh.degraded;
 
+  doc["run_state"] = ::to_str(run.state);
+  doc["run_reason"] = run.reason;
+
   JsonObject inhibit = doc["inhibit"].to<JsonObject>();
-  inhibit["run_allowed"] = sh.run_allowed;
-  inhibit["outputs_allowed"] = sh.outputs_allowed;
+  inhibit["run_allowed"] = run.run_allowed;
+  inhibit["outputs_allowed"] = run.outputs_allowed;
 
   JsonObject summary = doc["summary"].to<JsonObject>();
   summary["warn_count"] = sh.warn_count;
@@ -118,4 +122,21 @@ void publishers::publish_dout_ack(MqttBus& bus, uint32_t now_ms, uint32_t cmd_id
     doc["err"] = err;
   }
   bus.publish_json("io/dout/ack", doc, false, 0);
+}
+
+void publishers::publish_run_ack(MqttBus& bus, uint32_t now_ms, uint32_t cmd_id, bool ok, const RunStatus& run, const char* err) {
+  DynamicJsonDocument doc(256);
+  doc["v"] = NUCRYO_SCHEMA_V;
+  doc["ts_ms"] = now_ms;
+  doc["src"] = NODE_ID;
+  doc["cmd_id"] = cmd_id;
+  doc["ok"] = ok;
+  doc["state"] = ::to_str(run.state);
+  doc["reason"] = run.reason;
+  doc["run_allowed"] = run.run_allowed;
+  doc["outputs_allowed"] = run.outputs_allowed;
+  if (!ok && err) {
+    doc["err"] = err;
+  }
+  bus.publish_json("run/ack", doc, false, 0);
 }

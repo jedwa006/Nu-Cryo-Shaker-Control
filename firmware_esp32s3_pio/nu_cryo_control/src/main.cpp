@@ -12,6 +12,7 @@
 #include "core/mqtt_bus.h"
 #include "core/network_manager.h"
 #include "core/publishers.h"
+#include "core/run_control.h"
 
 // -------------------------------------------------------------------------------------------------
 // Core objects
@@ -23,7 +24,8 @@ static HealthManager g_health;
 static HealthRegistry g_health_registry(g_health);
 static EthHealthComponent g_eth_health(g_network);
 static FieldbusService g_fieldbus;
-static IoService g_io(g_bus, g_health);
+static RunControl g_run_control;
+static IoService g_io(g_bus, g_health, g_run_control);
 
 // -------------------------------------------------------------------------------------------------
 // MQTT connect + boot/LWT publishing
@@ -105,7 +107,7 @@ static void publish_reports(uint32_t now_ms)
   if (now_ms - last_system_health_pub >= SYS_HEALTH_PERIOD_MS) {
     last_system_health_pub = now_ms;
     const SystemHealth& sh = g_health.system_health();
-    publishers::publish_system_health(g_bus, sh, now_ms, NET_TOPICS.health);
+    publishers::publish_system_health(g_bus, sh, g_run_control.status(), now_ms, NET_TOPICS.health);
   }
 
   static uint32_t last_component_health_pub = 0;
@@ -183,6 +185,9 @@ void loop()
 
   // Evaluate system health (stale logic + aggregation)
   g_health.evaluate(now_ms);
+
+  // Apply run-control logic after health aggregation
+  g_run_control.update(g_health, g_io.din(), now_ms);
 
   // Let the bus pump MQTT callbacks when connected
   g_bus.loop();
