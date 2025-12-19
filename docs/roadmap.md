@@ -14,8 +14,8 @@ This plan captures the next set of firmware tasks after the PlatformIO migration
 
 ## 3) Finish run/estop control plane
 
-- Build a run/hold/stop/estop state machine that consumes `HealthManager` signals and DIN events. Gate shaker motion and relay outputs on `run_allowed`/`outputs_allowed` to ensure priority ordering (estop/DIN > health faults > operator run commands). 
-- Define MQTT command/ack topics for run control (start/stop/hold/reset) that align with the topic map in `docs/protocol.md`.
+- ✅ Implemented: `RunControl` now owns a run/hold/stop/estop state machine, consumes `HealthManager` + DIN interlocks, publishes status, and gates `run_allowed`/`outputs_allowed` for IO command enforcement.
+- Next: tune state transitions/reasons with real hardware inputs, and run integration testing of the MQTT run command/ack flow (start/stop/hold/reset) alongside DIN/health faults.
 
 ## 4) Align Modbus PID mapping and coverage
 
