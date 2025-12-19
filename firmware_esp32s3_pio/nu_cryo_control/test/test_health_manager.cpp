@@ -92,3 +92,25 @@ void test_stale_required_component_inhibits_run() {
   TEST_ASSERT_FALSE(sys.run_allowed);
   TEST_ASSERT_FALSE(sys.outputs_allowed);
 }
+
+void test_stale_ok_required_component_sets_error() {
+  HealthManager health;
+  FakeComponent heater("heater_drive");
+  heater.configure(true, true);
+  heater.set_stale_timeout_ms(200);
+
+  HealthReport report {};
+  report.expected = true;
+  report.required = true;
+  report.status = HealthStatus::OK;
+  report.last_ok_ms = 100;
+  heater.set_report(report);
+
+  TEST_ASSERT_TRUE(health.add(&heater));
+  health.evaluate(400);
+
+  const SystemHealth& sys = health.system_health();
+  TEST_ASSERT_EQUAL(HealthStatus::ERROR, sys.system_state);
+  TEST_ASSERT_FALSE(sys.run_allowed);
+  TEST_ASSERT_FALSE(sys.outputs_allowed);
+}
