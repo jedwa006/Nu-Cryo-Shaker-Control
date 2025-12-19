@@ -29,9 +29,10 @@
       return false;
     }
 
-    bool PidModbusComponent::tick(uint32_t now_ms) {
+    bool PidModbusComponent::tick(uint32_t now_ms, bool scheduled) {
       if (!rep_.expected) return false;
 
+      bool refreshed = false;
       if (pending_result_ == PendingResult::Ok) {
         pending_result_ = PendingResult::None;
         rep_.status = HealthStatus::OK;
@@ -42,7 +43,7 @@
         state_.pv = LC108::decode_temp(static_cast<int16_t>(regs_[0]));
         state_.out_pct = LC108::decode_percent(static_cast<int16_t>(regs_[1]));
         state_.sv = LC108::decode_temp(static_cast<int16_t>(regs_[kRegCount - 1]));
-        return true;
+        refreshed = true;
       }
 
       if (pending_result_ == PendingResult::Fail) {
@@ -61,6 +62,8 @@
         state_.valid = false;
       }
 
+      if (!scheduled) return refreshed;
+
       if (!request_in_flight_) {
         if (rep_.reason && strcmp(rep_.reason, "not_probed") == 0) {
           probe(now_ms);
@@ -68,7 +71,7 @@
           start_read(now_ms);
         }
       }
-      return false;
+      return refreshed;
     }
 
     namespace {

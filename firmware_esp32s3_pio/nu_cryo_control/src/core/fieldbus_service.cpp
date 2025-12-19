@@ -45,9 +45,14 @@ void FieldbusService::tick(uint32_t now_ms) {
   last_pid_tick_ms_ = now_ms;
 
   mb_.task();
-  pid_heat1_.tick(now_ms);
-  pid_heat2_.tick(now_ms);
-  pid_cool1_.tick(now_ms);
+  PidModbusComponent* pids[] = {&pid_heat1_, &pid_heat2_, &pid_cool1_};
+  constexpr size_t kPidCount = sizeof(pids) / sizeof(pids[0]);
+  const size_t scheduled_index = next_pid_index_ % kPidCount;
+  for (size_t i = 0; i < kPidCount; ++i) {
+    const bool scheduled = (i == scheduled_index);
+    pids[i]->tick(now_ms, scheduled);
+  }
+  next_pid_index_ = static_cast<uint8_t>((next_pid_index_ + 1) % kPidCount);
 #else
   (void)now_ms;
 #endif
