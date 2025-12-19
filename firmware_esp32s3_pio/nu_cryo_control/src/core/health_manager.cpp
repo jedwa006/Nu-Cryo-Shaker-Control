@@ -25,8 +25,8 @@ void HealthManager::evaluate(uint32_t now_ms) {
     HealthReport r = c->report();
 
     // Apply stale rule centrally (without mutating component) by interpreting report.
-    // If a component is expected and has a stale timeout, and hasn't been OK recently,
-    // we treat it as STALE for aggregation severity purposes.
+    // If expected components report OK but exceed stale_timeout_ms since last_ok_ms,
+    // they are treated as STALE for aggregation.
     if (r.expected && r.status == HealthStatus::OK && c->stale_timeout_ms() > 0) {
       if (r.last_ok_ms > 0 && now_ms >= r.last_ok_ms) {
         const uint32_t dt = now_ms - r.last_ok_ms;
