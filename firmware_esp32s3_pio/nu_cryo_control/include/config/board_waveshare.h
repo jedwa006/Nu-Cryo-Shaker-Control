@@ -67,7 +67,7 @@ inline constexpr ModbusConfig BOARD_WAVESHARE_MODBUS{
   .baud = 9600,
   .tx_pin = 17,
   .rx_pin = 18,
-  .de_re_pin = -1,
+  .de_re_pin = 19,
   .pid_heat1_id = 1,
   .pid_heat2_id = 2,
   .pid_cool1_id = 3,
