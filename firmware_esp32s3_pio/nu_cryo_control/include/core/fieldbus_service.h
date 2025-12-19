@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <Arduino.h>
 
 #include "app/app_config.h"
@@ -29,6 +30,7 @@ private:
   PidModbusComponent pid_heat1_;
   PidModbusComponent pid_heat2_;
   PidModbusComponent pid_cool1_;
+  std::array<PidModbusComponent*, 3> pids_ {};
   bool enabled_ {false};
   uint32_t last_pid_tick_ms_ {0};
   uint8_t next_pid_index_ {0};
