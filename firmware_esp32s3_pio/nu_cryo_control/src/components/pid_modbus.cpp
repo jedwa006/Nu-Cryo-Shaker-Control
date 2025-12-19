@@ -1,6 +1,7 @@
 \
 #include "components/pid_modbus.h"
     #include "app/app_config.h"
+    #include <cstring>
 
     PidModbusComponent::PidModbusComponent(const char* name, uint8_t slave_id, ModbusRTU& mb)
       : name_(name), slave_id_(slave_id), mb_(mb) {}
@@ -43,6 +44,10 @@
     bool PidModbusComponent::tick(uint32_t now_ms) {
       if (!rep_.expected) return false;
 
+      if (rep_.reason && strcmp(rep_.reason, "not_probed") == 0) {
+        return probe(now_ms);
+      }
+
       float pv=0, sv=0, out=0;
       const bool ok = read_live(pv, sv, out);
 
@@ -60,36 +65,45 @@
           rep_.severity = rep_.required ? Severity::CRIT : Severity::WARN;
           rep_.reason = "modbus_read_fail";
           rep_.since_ms = now_ms;
+        } else {
+          rep_.status = HealthStatus::MISSING;
+          rep_.severity = rep_.required ? Severity::CRIT : Severity::WARN;
+          rep_.reason = "modbus_no_response";
+          if (rep_.since_ms == 0) rep_.since_ms = now_ms;
         }
         state_.valid = false;
       }
       return ok;
     }
 
+    namespace {
+    uint16_t modbus_addr(uint16_t one_based) {
+      return (one_based > 0) ? static_cast<uint16_t>(one_based - 1) : 0;
+    }
+    }
+
     bool PidModbusComponent::read_live(float& pv, float& sv, float& out) {
-      // Placeholder implementation:
-      // Many PID controllers return scaled ints (e.g. 10x). Update this to your register map.
       uint16_t pv_raw=0, sv_raw=0, out_raw=0;
 
       bool ok = true;
-      ok &= mb_.readHreg(slave_id_, REG_PV, &pv_raw, 1);
-      ok &= mb_.readHreg(slave_id_, REG_SV, &sv_raw, 1);
-      ok &= mb_.readHreg(slave_id_, REG_OUT_PCT, &out_raw, 1);
+      ok &= mb_.readHreg(slave_id_, modbus_addr(REG_PV), &pv_raw, 1);
+      ok &= mb_.readHreg(slave_id_, modbus_addr(REG_SV), &sv_raw, 1);
+      ok &= mb_.readHreg(slave_id_, modbus_addr(REG_OUT_PCT), &out_raw, 1);
       mb_.task(); // allow library to progress
 
       if (!ok) return false;
 
-      pv = (float)pv_raw * 0.1f;
-      sv = (float)sv_raw * 0.1f;
-      out = (float)out_raw * 0.1f;
+      pv = LC108::decode_temp(static_cast<int16_t>(pv_raw));
+      sv = LC108::decode_temp(static_cast<int16_t>(sv_raw));
+      out = LC108::decode_percent(static_cast<int16_t>(out_raw));
       return true;
     }
 
     bool PidModbusComponent::set_sv(float sv, uint32_t now_ms) {
       if (!rep_.expected) return false;
-      const uint16_t sv_raw = (uint16_t)(sv * 10.0f);
+      const uint16_t sv_raw = static_cast<uint16_t>(LC108::encode_temp(sv));
 
-      const bool ok = mb_.writeHreg(slave_id_, REG_SV, sv_raw);
+      const bool ok = mb_.writeHreg(slave_id_, modbus_addr(REG_SV), sv_raw);
       mb_.task();
 
       if (ok) {

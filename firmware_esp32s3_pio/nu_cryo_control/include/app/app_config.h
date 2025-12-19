@@ -21,8 +21,68 @@ static constexpr uint32_t PID_STATE_PERIOD_MS      = 200;   // 5 Hz panel-emulat
 static constexpr uint32_t PID_PARAMS_PERIOD_MS     = 5000;  // slow
 static constexpr uint32_t IO_STATE_PERIOD_MS       = 200;
 
-// Register map placeholders (adjust to your controller)
-// You can keep these grouped per controller type later if you support multiple PID brands/models.
-static constexpr uint16_t REG_PV = 0x0000;      // TODO
-static constexpr uint16_t REG_SV = 0x0001;      // TODO
-static constexpr uint16_t REG_OUT_PCT = 0x0002; // TODO
+// Register map for LC108 / COM-800-C1 compatible PID controllers.
+// Register numbers are 1-based (per the controller docs).
+namespace LC108 {
+enum Reg : uint16_t {
+  PV     = 1,   // Process value (measured temperature), x10
+  MV1    = 2,   // Output 1 %, x10
+  MV2    = 3,   // Output 2 %, x10
+  MVFB   = 4,   // Feedback %, x10
+  STATUS = 5,   // Status / output bitfield
+  SV     = 6,   // Main setpoint, x10
+  SV1    = 8,
+  SV2    = 9,
+  SV3    = 10,
+  SV4    = 11,
+  AT     = 13,
+  MODE   = 14,
+  AL1    = 15,
+  AL2    = 16,
+  SC     = 24,
+  P1     = 25,
+  I1     = 26,
+  D1     = 27,
+  CYT1   = 30,
+  HYS1   = 31,
+  RST1   = 32,
+  OPL1   = 33,
+  OPH1   = 34,
+  BUF1   = 35,
+  INP1   = 66,
+  DP     = 67,
+  UNIT   = 68,
+  LSPL   = 69,
+  USPL   = 70,
+  PVOS   = 71,
+  PVFT   = 72,
+  ANL1   = 73,
+  ANH1   = 74,
+  ALD1   = 77,
+  AH1    = 78,
+  ALT1   = 79,
+  ALD2   = 80,
+  AH2    = 81,
+  ALT2   = 82,
+  PMD    = 92,
+  TSP    = 93,
+  PEND   = 94,
+  IDNO   = 95,
+  BAUD   = 96,
+  UCR    = 97,
+  EXC1   = 98,
+  A1L1   = 99,
+  EXC2   = 100,
+  A1L2   = 101
+};
+
+inline float decode_temp(int16_t value) { return static_cast<float>(value) / 10.0f; }
+inline int16_t encode_temp(float temp) { return static_cast<int16_t>(temp * 10.0f + 0.5f); }
+inline float decode_percent(int16_t value) { return static_cast<float>(value) / 10.0f; }
+inline int16_t encode_percent(float percent) { return static_cast<int16_t>(percent * 10.0f + 0.5f); }
+} // namespace LC108
+
+// Primary runtime registers used by the PID component (1-based).
+static constexpr uint16_t REG_PV = LC108::PV;
+static constexpr uint16_t REG_SV = LC108::SV;
+static constexpr uint16_t REG_OUT_PCT = LC108::MV1;
