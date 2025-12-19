@@ -71,10 +71,34 @@ void publishers::publish_pid_state(MqttBus& bus, const char* pid_name, const Pid
   doc["pv"] = st.pv;
   doc["sv"] = st.sv;
   doc["out_pct"] = st.out_pct;
+  doc["status"] = st.status;
+  doc["alarm1"] = st.alarm1;
+  doc["alarm2"] = st.alarm2;
+  doc["alarm_active"] = st.alarm_active;
   doc["valid"] = st.valid;
 
   char subtopic[128];
   snprintf(subtopic, sizeof(subtopic), "pid/%s/state", pid_name);
+  bus.publish_json(subtopic, doc, false, 0);
+}
+
+void publishers::publish_pid_params(MqttBus& bus, const char* pid_name, const PidParams& params, uint32_t now_ms) {
+  DynamicJsonDocument doc(384);
+  doc["v"] = NUCRYO_SCHEMA_V;
+  doc["ts_ms"] = now_ms;
+  doc["src"] = NODE_ID;
+
+  doc["p"] = params.p;
+  doc["i"] = params.i;
+  doc["d"] = params.d;
+  doc["output_min"] = params.output_min;
+  doc["output_max"] = params.output_max;
+  doc["sv_min"] = params.sv_min;
+  doc["sv_max"] = params.sv_max;
+  doc["valid"] = params.valid;
+
+  char subtopic[128];
+  snprintf(subtopic, sizeof(subtopic), "pid/%s/params", pid_name);
   bus.publish_json(subtopic, doc, false, 0);
 }
 
