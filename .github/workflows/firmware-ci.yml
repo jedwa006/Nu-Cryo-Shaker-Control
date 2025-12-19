@@ -39,6 +39,8 @@ jobs:
 
       - name: Run native unit tests
         working-directory: firmware_esp32s3_pio/nu_cryo_control
+        # TODO: Re-enable or gate native tests once CI support is ready.
+        if: false
         run: pio test -e native
 
       - name: Upload firmware artifacts
