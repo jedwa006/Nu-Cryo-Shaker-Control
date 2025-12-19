@@ -49,9 +49,9 @@ void FieldbusService::tick(uint32_t now_ms) {
   constexpr size_t kPidCount = sizeof(pids) / sizeof(pids[0]);
   const size_t scheduled_index = next_pid_index_ % kPidCount;
   for (size_t i = 0; i < kPidCount; ++i) {
-    const bool scheduled = (i == scheduled_index);
-    pids[i]->tick(now_ms, scheduled);
+    pids[i]->tick(now_ms);
   }
+  pids[scheduled_index]->start_read(now_ms);
   next_pid_index_ = static_cast<uint8_t>((next_pid_index_ + 1) % kPidCount);
 #else
   (void)now_ms;

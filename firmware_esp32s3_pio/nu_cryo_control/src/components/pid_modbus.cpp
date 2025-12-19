@@ -1,7 +1,6 @@
 \
 #include "components/pid_modbus.h"
-    #include "app/app_config.h"
-    #include <cstring>
+#include "app/app_config.h"
 
     PidModbusComponent::PidModbusComponent(const char* name, uint8_t slave_id, ModbusRTU& mb)
       : name_(name), slave_id_(slave_id), mb_(mb) {}
@@ -29,7 +28,7 @@
       return false;
     }
 
-    bool PidModbusComponent::tick(uint32_t now_ms, bool scheduled) {
+    bool PidModbusComponent::tick(uint32_t now_ms) {
       if (!rep_.expected) return false;
 
       bool refreshed = false;
@@ -62,15 +61,6 @@
         state_.valid = false;
       }
 
-      if (!scheduled) return refreshed;
-
-      if (!request_in_flight_) {
-        if (rep_.reason && strcmp(rep_.reason, "not_probed") == 0) {
-          probe(now_ms);
-        } else {
-          start_read(now_ms);
-        }
-      }
       return refreshed;
     }
 
