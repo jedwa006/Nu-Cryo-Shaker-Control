@@ -38,6 +38,10 @@ struct ModbusConfig {
   uint8_t pid_cool1_id;
 };
 
+#ifndef NUCRYO_WAVESHARE_RS485_DE_RE_PIN
+#define NUCRYO_WAVESHARE_RS485_DE_RE_PIN -1
+#endif
+
 inline constexpr BoardPins BOARD_WAVESHARE_PINS{
   .w5500_cs = 16,   // ETH_PHY_CS
   .w5500_int = 12,  // ETH_PHY_IRQ
@@ -67,7 +71,8 @@ inline constexpr ModbusConfig BOARD_WAVESHARE_MODBUS{
   .baud = 9600,
   .tx_pin = 17,
   .rx_pin = 18,
-  .de_re_pin = 19,
+  // NOTE: Avoid USB D- (GPIO19) on ESP32-S3; override with a build flag if needed.
+  .de_re_pin = NUCRYO_WAVESHARE_RS485_DE_RE_PIN,
   .pid_heat1_id = 1,
   .pid_heat2_id = 2,
   .pid_cool1_id = 3,
