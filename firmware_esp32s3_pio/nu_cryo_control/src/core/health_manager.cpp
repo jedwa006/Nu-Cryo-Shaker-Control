@@ -1,4 +1,3 @@
-\
 #include "core/health_manager.h"
     bool HealthManager::add(IHealthComponent* c) {
       if (!c) return false;

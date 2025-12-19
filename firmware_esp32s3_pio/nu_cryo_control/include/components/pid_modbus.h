@@ -1,4 +1,3 @@
-\
     #pragma once
     #include "app/app_config.h"
     #include "core/health_manager.h"

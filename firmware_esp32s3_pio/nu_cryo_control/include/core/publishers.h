@@ -1,4 +1,3 @@
-\
     #pragma once
 #include "core/mqtt_bus.h"
 #include "core/health_manager.h"
