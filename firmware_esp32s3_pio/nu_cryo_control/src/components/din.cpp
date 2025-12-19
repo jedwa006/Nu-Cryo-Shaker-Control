@@ -1,7 +1,5 @@
 #include "components/din.h"
 
-#include <Arduino.h>
-
 namespace {
 bool bit_set(uint8_t mask, uint8_t bit) { return (mask & (1u << bit)) != 0; }
 }
