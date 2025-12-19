@@ -51,8 +51,9 @@ void FieldbusService::tick(uint32_t now_ms) {
   for (size_t i = 0; i < kPidCount; ++i) {
     pids[i]->tick(now_ms);
   }
-  pids[scheduled_index]->start_read(now_ms);
-  next_pid_index_ = static_cast<uint8_t>((next_pid_index_ + 1) % kPidCount);
+  if (pids[scheduled_index]->start_read(now_ms)) {
+    next_pid_index_ = static_cast<uint8_t>((next_pid_index_ + 1) % kPidCount);
+  }
 #else
   (void)now_ms;
 #endif
